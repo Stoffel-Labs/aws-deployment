@@ -1,0 +1,4 @@
+[submodule "StoffelVM"]
+	path = StoffelVM
+	url = git@github.com:Stoffel-Labs/StoffelVM.git
+	branch = feature/the-great-refactoring
