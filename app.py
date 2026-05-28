@@ -153,7 +153,7 @@ class StoffelVMCoordinatorStack(Stack):
                 command=["CMD-SHELL", "netstat -tuln | grep -q ':31415' || exit 1"],
                 interval=Duration.seconds(5),
                 timeout=Duration.seconds(3),
-                retries=20,
+                retries=10,
                 start_period=Duration.seconds(10),
             ),
             logging=self._log_driver(log_group, "coordinator"),
@@ -165,6 +165,8 @@ class StoffelVMCoordinatorStack(Stack):
             desired_count=1,
             security_groups=[sg],
             assign_public_ip=False,
+            circuit_breaker=ecs.DeploymentCircuitBreaker(rollback=True),
+            min_healthy_percent=0,
             cloud_map_options=ecs.CloudMapOptions(
                 name="coordinator",
                 dns_record_type=sd.DnsRecordType.A,
@@ -224,7 +226,7 @@ class StoffelVMCoordinatorStack(Stack):
                 command=["CMD-SHELL", "netstat -tuln | grep -q ':9000' || exit 1"],
                 interval=Duration.seconds(5),
                 timeout=Duration.seconds(3),
-                retries=20,
+                retries=10,
                 start_period=Duration.seconds(10),
             )
         task.add_container("Container", **container_kwargs)
@@ -236,6 +238,8 @@ class StoffelVMCoordinatorStack(Stack):
             desired_count=1,
             security_groups=[sg],
             assign_public_ip=False,
+            circuit_breaker=ecs.DeploymentCircuitBreaker(rollback=True),
+            min_healthy_percent=0,
             cloud_map_options=ecs.CloudMapOptions(
                 name=f"party{party_id}",
                 dns_record_type=sd.DnsRecordType.A,
@@ -280,6 +284,8 @@ class StoffelVMCoordinatorStack(Stack):
             desired_count=1,
             security_groups=[sg],
             assign_public_ip=False,
+            circuit_breaker=ecs.DeploymentCircuitBreaker(rollback=True),
+            min_healthy_percent=0,
         )
 
 
