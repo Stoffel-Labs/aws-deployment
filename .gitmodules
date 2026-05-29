@@ -2,3 +2,7 @@
 	path = StoffelVM
 	url = git@github.com:Stoffel-Labs/StoffelVM.git
 	branch = feature/the-great-refactoring
+[submodule "stoffel-mpc-coordinator"]
+	path = stoffel-mpc-coordinator
+	url = git@github.com:Stoffel-Labs/stoffel-mpc-coordinator.git
+	branch = aws-deployment
