@@ -1,0 +1,143 @@
+#!/bin/sh
+set -e
+
+STACK="StoffelVMCoordinatorStack"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+CLUSTER=$(get_output ClusterName)
+SG=$(get_output SecurityGroupId)
+SUBNETS=$(get_output SubnetIds)
+COORD_SVC=$(get_output CoordServiceName)
+NETWORK="awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG],assignPublicIp=ENABLED}"
+
+ALL_OUTPUTS=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+    --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' \
+    --output text)
+
+# Reset client env file
+printf '#!/bin/sh\n' > client-env.sh
+
+# Look up coordinator public IP
+echo "Looking up coordinator public IP..."
+COORD_TASK_ARN=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$COORD_SVC" \
+    --query 'taskArns[0]' --output text)
+COORD_ENI=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$COORD_TASK_ARN" \
+    --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='networkInterfaceId'].value | [0]" \
+    --output text)
+COORD_PUBLIC_IP=$(aws ec2 describe-network-interfaces --network-interface-ids "$COORD_ENI" \
+    --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+echo "  coordinator public IP: $COORD_PUBLIC_IP"
+echo "COORD_PUBLIC_IP=$COORD_PUBLIC_IP" >> client-env.sh
+
+# --- Purge stale Cloud Map registrations from any previous run ---
+# Each run registers a new instance ID (derived from the task ARN), so old
+# instances are never automatically removed. If they linger, DNS returns both
+# the dead IP and the new one, and parties may pick the wrong address and fail
+# to reach the bootnode, causing the 120 s session-announcement timeout.
+echo "Cleaning up stale Cloud Map registrations..."
+for IDX in 0 1 2 3 4; do
+    SVC_ARN=$(echo "$ALL_OUTPUTS" | awk -v k="Party${IDX}CloudMapArn" '$1 == k {print $2}')
+    SVC_ID=$(echo "$SVC_ARN" | sed 's|.*/||')
+    STALE=$(aws servicediscovery list-instances --service-id "$SVC_ID" \
+        --query 'Instances[*].Id' --output text 2>/dev/null)
+    for INST in $STALE; do
+        echo "  deregistering stale instance $INST from party${IDX} service..."
+        aws servicediscovery deregister-instance --service-id "$SVC_ID" --instance-id "$INST"
+    done
+done
+
+# --- Start party0 first and register it with Cloud Map ---
+# Parties 1-4 resolve party0's address via DNS (party0.stoffel-coord.local),
+# so party0 must be in Cloud Map before the others start.
+TASKDEF=$(echo "$ALL_OUTPUTS" | awk '$1 == "Party0TaskDef" {print $2}')
+CM_ARN=$(echo "$ALL_OUTPUTS" | awk '$1 == "Party0CloudMapArn" {print $2}')
+CM_SVC_ID=$(echo "$CM_ARN" | sed 's|.*/||')
+
+echo "Starting party0..."
+PARTY0_ARN=$(aws ecs run-task \
+    --cluster "$CLUSTER" \
+    --launch-type FARGATE \
+    --task-definition "$TASKDEF" \
+    --network-configuration "$NETWORK" \
+    --query 'tasks[0].taskArn' \
+    --output text)
+echo "  task: $PARTY0_ARN"
+
+echo "  Waiting for party0 to reach RUNNING..."
+aws ecs wait tasks-running --cluster "$CLUSTER" --tasks "$PARTY0_ARN"
+
+PRIVATE_IP=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$PARTY0_ARN" \
+    --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='privateIPv4Address'].value | [0]" \
+    --output text)
+PUBLIC_IP=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$PARTY0_ARN" \
+    --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='networkInterfaceId'].value | [0]" \
+    --output text \
+    | xargs -I{} aws ec2 describe-network-interfaces --network-interface-ids {} \
+        --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+
+INSTANCE_ID=$(echo "$PARTY0_ARN" | sed 's|.*/||')
+echo "  Registering party0 (IP: $PRIVATE_IP) with Cloud Map service $CM_SVC_ID..."
+aws servicediscovery register-instance \
+    --service-id "$CM_SVC_ID" \
+    --instance-id "$INSTANCE_ID" \
+    --attributes "AWS_INSTANCE_IPV4=$PRIVATE_IP"
+
+echo "  party0 public IP: $PUBLIC_IP"
+echo "PARTY0_PUBLIC_IP=$PUBLIC_IP" >> client-env.sh
+
+# --- Start parties 1-4 simultaneously to beat the 120s bootnode session timeout ---
+# The timeout runs from when party0 first registers with the bootnode, so all parties
+# must join before party0's 120s window expires.
+echo "Starting parties 1-4 in parallel..."
+ALL_REMAINING_ARNS=""
+for IDX in 1 2 3 4; do
+    TASKDEF=$(echo "$ALL_OUTPUTS" | awk -v k="Party${IDX}TaskDef" '$1 == k {print $2}')
+    TASK_ARN=$(aws ecs run-task \
+        --cluster "$CLUSTER" \
+        --launch-type FARGATE \
+        --task-definition "$TASKDEF" \
+        --network-configuration "$NETWORK" \
+        --query 'tasks[0].taskArn' \
+        --output text)
+    echo "  party${IDX} task: $TASK_ARN"
+    ALL_REMAINING_ARNS="$ALL_REMAINING_ARNS $TASK_ARN"
+    eval "TASK_ARN_${IDX}=$TASK_ARN"
+done
+
+echo "  Waiting for parties 1-4 to reach RUNNING..."
+# shellcheck disable=SC2086  # word-splitting on $ALL_REMAINING_ARNS is intentional
+aws ecs wait tasks-running --cluster "$CLUSTER" --tasks $ALL_REMAINING_ARNS
+
+for IDX in 1 2 3 4; do
+    eval "TASK_ARN=\$TASK_ARN_${IDX}"
+    CM_ARN=$(echo "$ALL_OUTPUTS" | awk -v k="Party${IDX}CloudMapArn" '$1 == k {print $2}')
+    CM_SVC_ID=$(echo "$CM_ARN" | sed 's|.*/||')
+
+    PRIVATE_IP=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+        --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='privateIPv4Address'].value | [0]" \
+        --output text)
+    PUBLIC_IP=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+        --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='networkInterfaceId'].value | [0]" \
+        --output text \
+        | xargs -I{} aws ec2 describe-network-interfaces --network-interface-ids {} \
+            --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+
+    INSTANCE_ID=$(echo "$TASK_ARN" | sed 's|.*/||')
+    echo "  Registering party${IDX} (IP: $PRIVATE_IP) with Cloud Map service $CM_SVC_ID..."
+    aws servicediscovery register-instance \
+        --service-id "$CM_SVC_ID" \
+        --instance-id "$INSTANCE_ID" \
+        --attributes "AWS_INSTANCE_IPV4=$PRIVATE_IP"
+
+    echo "  party${IDX} public IP: $PUBLIC_IP"
+    echo "PARTY${IDX}_PUBLIC_IP=$PUBLIC_IP" >> client-env.sh
+done
+
+echo "All nodes started."
+echo ""
+echo "Client environment written to client-env.sh — run './run-client <client_id> <inputs>' to start a client."
