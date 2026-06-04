@@ -1,5 +1,6 @@
 # Setup
 
+0. Set up AWS using `aws configure`.
 1. Load the submodules using `git submodule update --init --recursive`.
 2. Build the `stoffel-run` binary using `cd StoffelVM && cargo build --release`.
 
