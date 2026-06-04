@@ -1,58 +1,17 @@
+# Setup
 
-# Welcome to your CDK Python project!
+1. Load the submodules using `git submodule update --init --recursive`.
+2. Build the `stoffel-run` binary using `cd StoffelVM && cargo build --release`.
 
-This is a blank project for CDK development with Python.
+# Running the MPC Program
 
-The `cdk.json` file tells the CDK Toolkit how to execute your app.
+1. Start the nodes using `./run-nodes`.
+1. Start each client using `./run-client`.
 
-This project is set up like a standard Python project.  The initialization
-process also creates a virtualenv within this project, stored under the `.venv`
-directory.  To create the virtualenv it assumes that there is a `python3`
-(or `python` for Windows) executable in your path with access to the `venv`
-package. If for any reason the automatic creation of the virtualenv fails,
-you can create the virtualenv manually.
-
-To manually create a virtualenv on MacOS and Linux:
+Example:
 
 ```
-$ python3 -m venv .venv
+./run-nodes
+./run-client 0 0 0 &
+./run-client 1 1 1
 ```
-
-After the init process completes and the virtualenv is created, you can use the following
-step to activate your virtualenv.
-
-```
-$ source .venv/bin/activate
-```
-
-If you are a Windows platform, you would activate the virtualenv like this:
-
-```
-% .venv\Scripts\activate.bat
-```
-
-Once the virtualenv is activated, you can install the required dependencies.
-
-```
-$ pip install -r requirements.txt
-```
-
-At this point you can now synthesize the CloudFormation template for this code.
-
-```
-$ cdk synth
-```
-
-To add additional dependencies, for example other CDK libraries, just add
-them to your `requirements.txt` file and rerun the `python -m pip install -r requirements.txt`
-command.
-
-## Useful commands
-
- * `cdk ls`          list all stacks in the app
- * `cdk synth`       emits the synthesized CloudFormation template
- * `cdk deploy`      deploy this stack to your default AWS account/region
- * `cdk diff`        compare deployed stack with current state
- * `cdk docs`        open CDK documentation
-
-Enjoy!
