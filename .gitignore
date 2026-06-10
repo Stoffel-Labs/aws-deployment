@@ -7,3 +7,6 @@ __pycache__
 # CDK asset staging directory
 .cdk.staging
 cdk.out
+
+# SSH private key — never commit (generate with ./gen-key)
+aws-key

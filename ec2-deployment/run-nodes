@@ -1,0 +1,176 @@
+#!/bin/sh
+set -e
+
+STACK="StoffelVMCoordinatorEC2Stack"
+REGION="${AWS_DEFAULT_REGION:-$(aws configure get region)}"
+N_PARTIES=5
+THRESHOLD=1
+AUTH_TOKEN="${STOFFEL_AUTH_TOKEN:-}"
+if [ -z "$AUTH_TOKEN" ]; then
+    echo "Error: STOFFEL_AUTH_TOKEN is not set" >&2
+    exit 1
+fi
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+get_private_ip() {
+    aws ec2 describe-instances --instance-ids "$1" \
+        --query "Reservations[0].Instances[0].PrivateIpAddress" \
+        --output text
+}
+
+# Send a shell script to an EC2 instance via SSM and wait up to 600s for it to finish.
+# The script is base64-encoded to avoid quoting issues with docker flags and env values.
+ssm_run() {
+    INSTANCE_ID="$1"
+    SCRIPT="$2"
+    ENCODED=$(printf '%s' "$SCRIPT" | base64 | tr -d '\n')
+    CMD_ID=$(aws ssm send-command \
+        --instance-ids "$INSTANCE_ID" \
+        --document-name "AWS-RunShellScript" \
+        --parameters "{\"commands\":[\"echo $ENCODED | base64 -d | bash\"]}" \
+        --query "Command.CommandId" \
+        --output text)
+    echo "  SSM $CMD_ID -> $INSTANCE_ID"
+    i=0
+    while [ "$i" -lt 60 ]; do
+        STATUS=$(aws ssm get-command-invocation \
+            --command-id "$CMD_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "Status" \
+            --output text 2>/dev/null || echo "Pending")
+        case "$STATUS" in
+            Success) return 0 ;;
+            Failed|Cancelled|TimedOut)
+                echo "  SSM command $CMD_ID failed: $STATUS" >&2
+                return 1
+                ;;
+        esac
+        sleep 10
+        i=$((i + 1))
+    done
+    echo "  SSM command $CMD_ID timed out after 600s" >&2
+    return 1
+}
+
+echo "Looking up stack outputs..."
+COORD_INSTANCE=$(get_output CoordInstanceId)
+COORD_PUBLIC_IP=$(get_output CoordPublicIp)
+PARTY_IMAGE=$(get_output PartyImageUri)
+COORD_IMAGE=$(get_output CoordImageUri)
+
+for IDX in 0 1 2 3 4; do
+    eval "PARTY${IDX}_INSTANCE=$(get_output Party${IDX}InstanceId)"
+    eval "PARTY${IDX}_PUBLIC_IP=$(get_output Party${IDX}PublicIp)"
+done
+
+echo "Looking up private IPs..."
+COORD_PRIVATE_IP=$(get_private_ip "$COORD_INSTANCE")
+for IDX in 0 1 2 3 4; do
+    eval "PARTY${IDX}_PRIVATE_IP=\$(get_private_ip \"\$PARTY${IDX}_INSTANCE\")"
+done
+
+# Derive the ECR registry hostname from the image URI (everything before the first /)
+ECR_REGISTRY=$(echo "$PARTY_IMAGE" | cut -d/ -f1)
+ECR_LOGIN="aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REGISTRY"
+
+COORD_ADDR="${COORD_PRIVATE_IP}:31415"
+INITIAL_MPC_NODES="/app/ids/pub/nodes/node0.crt,/app/ids/pub/nodes/node1.crt,/app/ids/pub/nodes/node2.crt,/app/ids/pub/nodes/node3.crt,/app/ids/pub/nodes/node4.crt"
+
+# Reset client env file
+printf '#!/bin/sh\n' > client-env.sh
+echo "COORD_PUBLIC_IP=$COORD_PUBLIC_IP" >> client-env.sh
+for IDX in 0 1 2 3 4; do
+    eval "echo PARTY${IDX}_PUBLIC_IP=\$PARTY${IDX}_PUBLIC_IP >> client-env.sh"
+done
+
+# Env flags shared across all party containers; expanded here so SSM receives literal values.
+COMMON_ENV="-e STOFFEL_AUTH_TOKEN=$AUTH_TOKEN \
+  -e STOFFEL_N_PARTIES=$N_PARTIES \
+  -e STOFFEL_THRESHOLD=$THRESHOLD \
+  -e STOFFEL_PROGRAM=/app/programs/client_sub_order.stflb \
+  -e STOFFEL_ENTRY=main \
+  -e STOFFEL_COORD_ADDR=$COORD_ADDR \
+  -e STOFFEL_EXPECTED_CLIENTS=/app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt"
+
+# --- Coordinator ---
+echo "Starting coordinator on $COORD_INSTANCE..."
+ssm_run "$COORD_INSTANCE" "
+$ECR_LOGIN
+docker stop stoffel-coord 2>/dev/null || true
+docker rm   stoffel-coord 2>/dev/null || true
+docker pull $COORD_IMAGE
+docker run -d --name stoffel-coord \
+  -p 31415:31415 \
+  $COORD_IMAGE \
+  --addr 0.0.0.0 \
+  --hash 0000000000000000000000000000000000000000000000000000000000000000 \
+  --server-cert /app/ids/pub/coord.crt \
+  --server-key /app/ids/priv/coord.der \
+  --n $N_PARTIES \
+  --t $THRESHOLD \
+  --n-inputs 2 \
+  --output-clients /app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt \
+  --initial-mpc-nodes $INITIAL_MPC_NODES
+"
+echo "  coordinator started."
+
+# --- Party 0 (leader / bootstrap node) ---
+# Must be running and listening on :9000 before parties 1-4 try to connect.
+echo "Starting party0 on $PARTY0_INSTANCE..."
+ssm_run "$PARTY0_INSTANCE" "
+$ECR_LOGIN
+docker stop stoffel-party 2>/dev/null || true
+docker rm   stoffel-party 2>/dev/null || true
+docker pull $PARTY_IMAGE
+docker run -d --name stoffel-party \
+  -p 9000:9000 -p 9000:9000/udp -p 10000:10000 -p 10000:10000/udp -p 16180:16180 \
+  $COMMON_ENV \
+  -e STOFFEL_ROLE=leader \
+  -e STOFFEL_PARTY_ID=0 \
+  -e STOFFEL_ADVERTISE_IP=$PARTY0_PRIVATE_IP \
+  -e STOFFEL_BIND_ADDR=0.0.0.0:9000 \
+  -e STOFFEL_RPC_ADDR=0.0.0.0:16180 \
+  -e STOFFEL_CERT=/app/ids/pub/nodes/node0.crt \
+  -e STOFFEL_KEY=/app/ids/priv/nodes/node0.der \
+  $PARTY_IMAGE
+"
+echo "  party0 started. Waiting 15s for bootnode to be ready..."
+sleep 15
+
+# --- Parties 1-4 in parallel ---
+# All must join within party0's 120s session-announcement window.
+echo "Starting parties 1-4 in parallel..."
+for IDX in 1 2 3 4; do
+    eval "INSTANCE_ID=\$PARTY${IDX}_INSTANCE"
+    eval "PARTY_PRIVATE_IP=\$PARTY${IDX}_PRIVATE_IP"
+    BIND_PORT=$((9000 + IDX))
+    RPC_PORT=$((16180 + IDX))
+
+    ssm_run "$INSTANCE_ID" "
+$ECR_LOGIN
+docker stop stoffel-party 2>/dev/null || true
+docker rm   stoffel-party 2>/dev/null || true
+docker pull $PARTY_IMAGE
+docker run -d --name stoffel-party \
+  -p $BIND_PORT:$BIND_PORT -p $BIND_PORT:$BIND_PORT/udp -p $RPC_PORT:$RPC_PORT \
+  $COMMON_ENV \
+  -e STOFFEL_ROLE=party \
+  -e STOFFEL_PARTY_ID=$IDX \
+  -e STOFFEL_ADVERTISE_IP=$PARTY_PRIVATE_IP \
+  -e STOFFEL_BIND_ADDR=0.0.0.0:$BIND_PORT \
+  -e STOFFEL_RPC_ADDR=0.0.0.0:$RPC_PORT \
+  -e STOFFEL_CERT=/app/ids/pub/nodes/node$IDX.crt \
+  -e STOFFEL_KEY=/app/ids/priv/nodes/node$IDX.der \
+  -e STOFFEL_BOOTSTRAP_ADDR=$PARTY0_PRIVATE_IP:9000 \
+  $PARTY_IMAGE
+" &
+done
+wait
+echo "All nodes started."
+echo ""
+echo "Client environment written to client-env.sh — run './run-client <client_id> <inputs>' to start a client."

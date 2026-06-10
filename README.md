@@ -16,3 +16,13 @@ Example:
 ./run-client 0 0 0 &
 ./run-client 1 1 1
 ```
+
+# Deploying the CDK App
+
+To use the `cdk` binary for deployment, a virtual environment is needed that can be installed as follows:
+
+```
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```

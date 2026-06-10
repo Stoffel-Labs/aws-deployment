@@ -21,6 +21,8 @@ ALL_OUTPUTS=$(aws cloudformation describe-stacks --stack-name "$STACK" \
 
 # Reset client env file
 printf '#!/bin/sh\n' > client-env.sh
+# Reset log env file
+printf '#!/bin/sh\n' > log-env.sh
 
 # Look up coordinator public IP
 echo "Looking up coordinator public IP..."
@@ -55,6 +57,10 @@ done
 # Parties 1-4 resolve party0's address via DNS (party0.stoffel-coord.local),
 # so party0 must be in Cloud Map before the others start.
 TASKDEF=$(echo "$ALL_OUTPUTS" | awk '$1 == "Party0TaskDef" {print $2}')
+LOG_GROUP=$(aws ecs describe-task-definition --task-definition "$TASKDEF" \
+    --query 'taskDefinition.containerDefinitions[0].logConfiguration.options."awslogs-group"' \
+    --output text)
+echo "LOG_GROUP=$LOG_GROUP" >> log-env.sh
 CM_ARN=$(echo "$ALL_OUTPUTS" | awk '$1 == "Party0CloudMapArn" {print $2}')
 CM_SVC_ID=$(echo "$CM_ARN" | sed 's|.*/||')
 
@@ -89,6 +95,7 @@ aws servicediscovery register-instance \
 
 echo "  party0 public IP: $PUBLIC_IP"
 echo "PARTY0_PUBLIC_IP=$PUBLIC_IP" >> client-env.sh
+echo "PARTY0_LOG_STREAM=party0/Container/$INSTANCE_ID" >> log-env.sh
 
 # --- Start parties 1-4 simultaneously to beat the 120s bootnode session timeout ---
 # The timeout runs from when party0 first registers with the bootnode, so all parties
@@ -136,8 +143,10 @@ for IDX in 1 2 3 4; do
 
     echo "  party${IDX} public IP: $PUBLIC_IP"
     echo "PARTY${IDX}_PUBLIC_IP=$PUBLIC_IP" >> client-env.sh
+    echo "PARTY${IDX}_LOG_STREAM=party${IDX}/Container/$INSTANCE_ID" >> log-env.sh
 done
 
 echo "All nodes started."
 echo ""
 echo "Client environment written to client-env.sh — run './run-client <client_id> <inputs>' to start a client."
+echo "Log streams written to log-env.sh."

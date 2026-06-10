@@ -1,0 +1,22 @@
+SERVICES=("$@")
+
+for SERVICE in "${SERVICES[@]}"; do
+    echo "Scanning $SERVICE for stuck instances..."
+    
+    # Get all instances registered to this service
+    INSTANCES=$(aws servicediscovery list-instances --service-id $SERVICE --query 'Instances[*].Id' --output text)
+    
+    if [ -z "$INSTANCES" ] || [ "$INSTANCES" == "None" ]; then
+        echo "  -> No instances found. Ready for deletion."
+        continue
+    fi
+
+    # Loop through and deregister each instance
+    for INSTANCE in $INSTANCES; do
+        echo "  -> Deregistering instance $INSTANCE..."
+        aws servicediscovery deregister-instance --service-id $SERVICE --instance-id $INSTANCE
+        sleep 1 # Brief pause to avoid API rate limiting
+    done
+done
+
+echo "Cleanup complete!"

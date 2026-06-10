@@ -34,15 +34,15 @@ while [ "$i" -lt "$N_PARTIES" ]; do
     i=$((i + 1))
 done
 
-IDS_DIR="$(pwd)/ids"
-BINARY="StoffelVM/target/release/stoffel-run"
+IDS_DIR="$(pwd)/../ids"
+BINARY="../StoffelVM/target/release/stoffel-run"
 
 if [ ! -f "$BINARY" ]; then
-    echo "Binary not found at $BINARY — run 'cargo build --release' in StoffelVM/" >&2
+    echo "Binary not found at $BINARY — run 'cargo build --release' in ../StoffelVM/" >&2
     exit 1
 fi
 
-RUST_LOG=info RUST_BACKTRACE=1 exec "$BINARY" \
+RUST_BACKTRACE=1 exec "$BINARY" \
     --client \
     --inputs "$INPUTS" \
     --servers "$SERVERS" \

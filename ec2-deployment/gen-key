@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+# Generate a local ED25519 key pair for use with the EC2 deployment.
+# aws-key     — private key (kept locally, baked into the POS node at deploy time)
+# aws-key.pub — public key (imported into EC2 as the shared key pair)
+
+if [ -f aws-key ]; then
+    echo "aws-key already exists. Delete it first if you want to regenerate." >&2
+    exit 1
+fi
+
+ssh-keygen -t ed25519 -f aws-key -N ""
+echo ""
+echo "Generated aws-key and aws-key.pub."
+echo "Run 'cdk deploy' to deploy — the public key will be imported into EC2"
+echo "and the private key will be baked into the POS management node."
+echo ""
+echo "To SSH to any instance after deploying:"
+echo "  ssh -i aws-key ec2-user@<public-ip>"

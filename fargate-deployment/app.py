@@ -60,13 +60,13 @@ class StoffelVMCoordinatorStack(Stack):
 
         # stoffel-run binary
         party_image = ecs.ContainerImage.from_asset(
-            "StoffelVM",
+            "../StoffelVM",
             platform=ecr_assets.Platform.LINUX_AMD64,
         )
 
         # Off-chain coordinator
         coordinator_image = ecs.ContainerImage.from_asset(
-            "stoffel-mpc-coordinator",
+            "../stoffel-mpc-coordinator",
             platform=ecr_assets.Platform.LINUX_AMD64,
         )
 

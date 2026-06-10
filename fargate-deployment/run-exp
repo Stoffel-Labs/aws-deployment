@@ -1,0 +1,26 @@
+#!/bin/sh
+
+GROUP=$1
+ID=$RANDOM
+
+STREAMS=($(aws logs describe-log-streams --log-group-name $GROUP | jq -r '.logStreams.[].logStreamName'))
+
+N=2
+
+for i in $(seq 1 $N); do
+    TIMESTAMP=$(python3 -c 'import time; print(int(time.time() * 1000))')
+
+    echo "EXP $ID, IT $i at $TIMESTAMP"
+
+    echo "${STREAMS[@]}"
+    for stream in "${STREAMS[@]}"; do
+	aws logs put-log-events \
+	    --log-group-name $GROUP \
+	    --log-stream-name $stream \
+	    --log-events timestamp=$TIMESTAMP,message="IT $i" > /dev/null
+    done
+
+    ./run-nodes
+    ./run-client 0 0 0 &
+    ./run-client 1 1 1 &
+done 
