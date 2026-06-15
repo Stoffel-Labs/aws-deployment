@@ -1,0 +1,113 @@
+#!/bin/sh
+# Run N_ITER iterations of an MP-SPDZ experiment and collect results into a CSV.
+#
+# Usage: ./run-exp <program> <protocol> <n_parties> [n_iterations]
+#   e.g. ./run-exp tutorial mascot-party.x 3 5
+
+set -e
+
+PROGRAM="${1:?Usage: $0 <program> <protocol> <n_parties> [n_iterations]}"
+PROTOCOL="${2:?Usage: $0 <program> <protocol> <n_parties> [n_iterations]}"
+N_PARTIES="${3:?Usage: $0 <program> <protocol> <n_parties> [n_iterations]}"
+N_ITER="${4:-1}"
+CSV="results.csv"
+
+{
+    printf 'iter'
+    for j in $(seq 0 $((N_PARTIES - 1))); do
+        printf ',player%d_total_s,player%d_mem_mb,player%d_mpspdz_time_s,player%d_sent_mb' \
+            "$j" "$j" "$j" "$j"
+    done
+    printf '\n'
+} > "$CSV"
+
+for i in $(seq 1 $N_ITER); do
+    echo "=== Iteration $i ==="
+
+    ./run-nodes "$PROGRAM" "$PROTOCOL" "$N_PARTIES"
+
+    . ./log-env.sh
+
+    echo "Waiting for player tasks to stop..."
+    echo "$ALL_TASK_ARNS" | xargs aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks
+
+    row="$i"
+    for j in $(seq 0 $((N_PARTIES - 1))); do
+        eval "STREAM=\$PLAYER${j}_LOG_STREAM"
+
+        FIRST_TS=$(aws logs get-log-events \
+            --log-group-name "$LOG_GROUP" \
+            --log-stream-name "$STREAM" \
+            --start-from-head \
+            --limit 1 \
+            --query 'events[0].timestamp' \
+            --output text)
+
+        LAST_TS=$(aws logs get-log-events \
+            --log-group-name "$LOG_GROUP" \
+            --log-stream-name "$STREAM" \
+            --limit 1 \
+            --query 'events[0].timestamp' \
+            --output text)
+
+        if [ "$FIRST_TS" = "None" ] || [ "$LAST_TS" = "None" ]; then
+            DURATION="N/A"
+            MEM="N/A"
+            MPSPDZ_TIME="N/A"
+            SENT_MB="N/A"
+        else
+            DURATION=$(python3 -c "print(f'{($LAST_TS - $FIRST_TS) / 1000.0:.3f}')")
+
+            MEM_LINE=$(aws logs filter-log-events \
+                --log-group-name "$LOG_GROUP" \
+                --log-stream-names "$STREAM" \
+                --filter-pattern '"PEAK_MEM_BYTES"' \
+                --start-time "$FIRST_TS" \
+                --end-time "$((LAST_TS + 60000))" \
+                --query 'events[-1].message' \
+                --output text 2>/dev/null)
+            MEM=$(echo "$MEM_LINE" | python3 -c "
+import sys, re
+m = re.search(r'PEAK_MEM_BYTES: (\d+)', sys.stdin.read())
+print(f'{int(m.group(1)) / 1024 / 1024:.1f}' if m else 'N/A')
+")
+
+            # MP-SPDZ prints "Time = X seconds" (or "Time0 = X seconds (...)")
+            TIME_LINE=$(aws logs filter-log-events \
+                --log-group-name "$LOG_GROUP" \
+                --log-stream-names "$STREAM" \
+                --filter-pattern '"Time = "' \
+                --start-time "$FIRST_TS" \
+                --end-time "$((LAST_TS + 60000))" \
+                --query 'events[-1].message' \
+                --output text 2>/dev/null)
+            MPSPDZ_TIME=$(echo "$TIME_LINE" | python3 -c "
+import sys, re
+m = re.search(r'Time\d* = ([0-9.]+)', sys.stdin.read())
+print(m.group(1) if m else 'N/A')
+")
+
+            # MP-SPDZ prints "Data sent = X MB in ~Y rounds"
+            SENT_LINE=$(aws logs filter-log-events \
+                --log-group-name "$LOG_GROUP" \
+                --log-stream-names "$STREAM" \
+                --filter-pattern '"Data sent"' \
+                --start-time "$FIRST_TS" \
+                --end-time "$((LAST_TS + 60000))" \
+                --query 'events[-1].message' \
+                --output text 2>/dev/null)
+            SENT_MB=$(echo "$SENT_LINE" | python3 -c "
+import sys, re
+m = re.search(r'Data sent = ([0-9.]+)', sys.stdin.read())
+print(m.group(1) if m else 'N/A')
+")
+        fi
+
+        row="$row,$DURATION,$MEM,$MPSPDZ_TIME,$SENT_MB"
+    done
+
+    echo "$row" >> "$CSV"
+    echo "  -> $row"
+done
+
+echo "Results written to $CSV"

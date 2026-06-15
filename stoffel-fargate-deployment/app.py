@@ -9,6 +9,8 @@ from aws_cdk import (
     aws_ec2 as ec2,
     aws_ecs as ecs,
     aws_ecr_assets as ecr_assets,
+    aws_efs as efs,
+    aws_iam as iam,
     aws_logs as logs,
     aws_servicediscovery as sd,
 )
@@ -28,18 +30,32 @@ class StoffelVMCoordinatorStack(Stack):
     CDK context (pass via --context key=value):
       auth_token      - STOFFEL_AUTH_TOKEN (required)
 
+    Programs are stored on EFS. To deploy a program:
+      1. Generate a key pair:   ./gen-keypair
+      2. Deploy the stack:      cdk deploy
+      3. Upload the program:    ./upload-program program.stflb
+      4. Run nodes:             ./run-nodes program.stflb
+
     Clients run externally (e.g. on a laptop). See run-client.
     """
 
     N_PARTIES = 5
     THRESHOLD = 1
-    PROGRAM = "/app/programs/client_sub_order.stflb"
     NAMESPACE = "stoffel-coord.local"
+    PROGRAM_MOUNT = "/app/programs"
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         auth_token = self.node.try_get_context("auth_token") or ""
+
+        pub_key_file = os.path.join(os.path.dirname(__file__), "bastion-key.pub")
+        if os.path.exists(pub_key_file):
+            with open(pub_key_file) as f:
+                pub_key = f.read().strip()
+        else:
+            pub_key = None
+            print("WARNING: bastion-key.pub not found — run ./gen-keypair first")
 
         vpc = ec2.Vpc(
             self, "Vpc",
@@ -62,12 +78,14 @@ class StoffelVMCoordinatorStack(Stack):
         party_image = ecs.ContainerImage.from_asset(
             "../StoffelVM",
             platform=ecr_assets.Platform.LINUX_AMD64,
+            file="Dockerfile.benchmark",
         )
 
         # Off-chain coordinator
         coordinator_image = ecs.ContainerImage.from_asset(
             "../stoffel-mpc-coordinator",
             platform=ecr_assets.Platform.LINUX_AMD64,
+            file="Dockerfile.benchmark",
         )
 
         sg = ec2.SecurityGroup(self, "SG", vpc=vpc, allow_all_outbound=True)
@@ -85,30 +103,80 @@ class StoffelVMCoordinatorStack(Stack):
             retention=logs.RetentionDays.ONE_WEEK,
         )
 
+        # ------------------------------------------------------------------ #
+        # EFS: shared program storage mounted into every party container.     #
+        # Upload programs via the bastion; run-nodes selects one at launch.   #
+        # ------------------------------------------------------------------ #
+        efs_sg = ec2.SecurityGroup(self, "EfsSG", vpc=vpc, allow_all_outbound=False)
+        efs_sg.add_ingress_rule(cidr, ec2.Port.tcp(2049))
+
+        file_system = efs.FileSystem(
+            self, "ProgramsFs",
+            vpc=vpc,
+            security_group=efs_sg,
+            removal_policy=cdk.RemovalPolicy.RETAIN,
+        )
+
+        access_point = file_system.add_access_point("AP", path="/")
+
+        # ------------------------------------------------------------------ #
+        # Bastion EC2: SSH target for uploading .stflb files onto EFS.        #
+        # scp foo.stflb ec2-user@<BastionPublicIp>:/mnt/programs/            #
+        # Fargate tasks see the same files at /app/programs/.                 #
+        # Run ./gen-keypair before deploying to generate bastion-key.         #
+        # ------------------------------------------------------------------ #
+        bastion_key_pair = ec2.KeyPair(
+            self, "BastionKeyPair",
+            public_key_material=pub_key,
+        ) if pub_key else None
+
+        bastion_sg = ec2.SecurityGroup(self, "BastionSG", vpc=vpc, allow_all_outbound=True)
+        bastion_sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(22))
+
+        bastion_role = iam.Role(
+            self, "BastionRole",
+            assumed_by=iam.ServicePrincipal("ec2.amazonaws.com"),
+        )
+        file_system.grant_read_write(bastion_role)
+
+        bastion = ec2.Instance(
+            self, "Bastion",
+            vpc=vpc,
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
+            instance_type=ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MICRO),
+            machine_image=ec2.MachineImage.latest_amazon_linux2(),
+            security_group=bastion_sg,
+            key_pair=bastion_key_pair,
+            role=bastion_role,
+        )
+        bastion.user_data.add_commands(
+            "yum install -y amazon-efs-utils",
+            "mkdir -p /mnt/programs",
+            f"mount -t efs -o tls,iam {file_system.file_system_id}:/ /mnt/programs",
+            f"echo '{file_system.file_system_id}:/ /mnt/programs efs defaults,tls,iam,_netdev 0 0' >> /etc/fstab",
+            "chmod 777 /mnt/programs",
+        )
+        bastion.node.add_dependency(file_system)
+
         coord_addr = f"coordinator.{self.NAMESPACE}:31415"
 
+        # STOFFEL_PROGRAM is intentionally omitted; run-nodes passes it as a
+        # container override so each run can specify a different program.
         common_env = {
             "STOFFEL_AUTH_TOKEN": auth_token,
             "STOFFEL_N_PARTIES": str(self.N_PARTIES),
             "STOFFEL_THRESHOLD": str(self.THRESHOLD),
-            "STOFFEL_PROGRAM": self.PROGRAM,
             "STOFFEL_ENTRY": "main",
             "STOFFEL_COORD_ADDR": coord_addr,
             "STOFFEL_EXPECTED_CLIENTS": "/app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt",
             "RUST_LOG": "info",
-            "RUST_BACKTRACE": "1",  # TODO: needed?
+            "RUST_BACKTRACE": "1",
         }
-
-        rpc_servers = ",".join(
-            f"party{i}.{self.NAMESPACE}:{16180 + i}" for i in range(self.N_PARTIES)
-        )
-
-        # Finally, add all the necessary entities.
 
         coord_service = self._add_coordinator(cluster, coordinator_image, sg, log_group)
 
         party_results = [
-            self._add_party(i, cluster, party_image, sg, log_group, common_env)
+            self._add_party(i, cluster, party_image, sg, log_group, common_env, file_system, access_point)
             for i in range(self.N_PARTIES)
         ]
         party_tasks = [r[0] for r in party_results]
@@ -118,6 +186,8 @@ class StoffelVMCoordinatorStack(Stack):
         CfnOutput(self, "CoordServiceName", value=coord_service.service_name)
         CfnOutput(self, "SecurityGroupId", value=sg.security_group_id)
         CfnOutput(self, "SubnetIds", value=",".join(s.subnet_id for s in vpc.public_subnets))
+        CfnOutput(self, "BastionPublicIp", value=bastion.instance_public_ip)
+        CfnOutput(self, "EfsId", value=file_system.file_system_id)
         for i, task in enumerate(party_tasks):
             CfnOutput(self, f"Party{i}TaskDef", value=task.task_definition_arn)
         for i, svc in enumerate(party_cm_services):
@@ -132,7 +202,7 @@ class StoffelVMCoordinatorStack(Stack):
         image: ecs.ContainerImage,
         sg: ec2.SecurityGroup,
         log_group: logs.LogGroup,
-    ) -> None:
+    ):
         task = ecs.FargateTaskDefinition(self, "CoordTask", cpu=512, memory_limit_mib=1024)
         task.add_container(
             "Container",
@@ -186,7 +256,9 @@ class StoffelVMCoordinatorStack(Stack):
         sg: ec2.SecurityGroup,
         log_group: logs.LogGroup,
         common_env: dict,
-    ) -> None:
+        file_system: efs.FileSystem,
+        access_point: efs.AccessPoint,
+    ):
         bind_port = 9000 + party_id
         rpc_port  = 16180 + party_id
 
@@ -219,11 +291,33 @@ class StoffelVMCoordinatorStack(Stack):
         task = ecs.FargateTaskDefinition(
             self, f"Party{party_id}Task", cpu=512, memory_limit_mib=1024
         )
+        task.add_volume(
+            name="programs",
+            efs_volume_configuration=ecs.EfsVolumeConfiguration(
+                file_system_id=file_system.file_system_id,
+                transit_encryption="ENABLED",
+                authorization_config=ecs.AuthorizationConfig(
+                    access_point_id=access_point.access_point_id,
+                    iam="ENABLED",
+                ),
+            ),
+        )
+        file_system.grant_read(task.task_role)
+
         container_kwargs = dict(
             image=image,
             environment=environment,
             port_mappings=port_mappings,
             logging=self._log_driver(log_group, f"party{party_id}"),
+            entry_point=[
+                "/bin/bash", "-c",
+                "/app/entrypoint.sh; EXIT=$?; "
+                "MEM=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null"
+                " || cat /sys/fs/cgroup/memory/memory.max_usage_in_bytes 2>/dev/null"
+                " || cat /sys/fs/cgroup/memory.current 2>/dev/null);"
+                ' [ -n "$MEM" ] && echo "PEAK_MEM_BYTES: $MEM";'
+                " exit $EXIT",
+            ],
         )
         if party_id == 0:
             container_kwargs["health_check"] = ecs.HealthCheck(
@@ -233,7 +327,14 @@ class StoffelVMCoordinatorStack(Stack):
                 retries=10,
                 start_period=Duration.seconds(10),
             )
-        task.add_container("Container", **container_kwargs)
+        container = task.add_container("Container", **container_kwargs)
+        container.add_mount_points(
+            ecs.MountPoint(
+                container_path=self.PROGRAM_MOUNT,
+                source_volume="programs",
+                read_only=True,
+            )
+        )
 
         cm_service = sd.Service(
             self, f"Party{party_id}CloudMap",

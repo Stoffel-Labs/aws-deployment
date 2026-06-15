@@ -1,0 +1,5 @@
+*
+!mp-spdz/
+!mp-spdz/**
+!mp-spdz-fargate-deployment/Dockerfile
+!mp-spdz-fargate-deployment/entrypoint.sh

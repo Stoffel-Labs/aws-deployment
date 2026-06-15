@@ -1,0 +1,166 @@
+#!/bin/sh
+# Start MP-SPDZ player tasks on ECS Fargate.
+# Player 0 starts first (others connect to player0.mp-spdz.local once it is
+# registered in Cloud Map), then players 1..N-1 are started in parallel.
+#
+# Usage: ./run-nodes <program> <protocol> <n_parties>
+#   e.g. ./run-nodes tutorial mascot-party.x 3
+
+set -e
+
+PROGRAM="${1:?Usage: $0 <program> <protocol> <n_parties>}"
+PROTOCOL="${2:?Usage: $0 <program> <protocol> <n_parties>}"
+N_PARTIES="${3:?Usage: $0 <program> <protocol> <n_parties>}"
+
+case "$PROTOCOL" in
+    mascot-party.x|semi-party.x|semi2k-party.x|shamir-party.x|malicious-shamir-party.x) ;;
+    *) echo "ERROR: unknown protocol '${PROTOCOL}'." >&2
+       echo "  Valid: mascot-party.x semi-party.x semi2k-party.x shamir-party.x malicious-shamir-party.x" >&2
+       exit 1 ;;
+esac
+
+STACK="MpSpdzStack"
+IDENTITY="$(dirname "$0")/bastion-key"
+
+BASTION_IP=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+    --query "Stacks[0].Outputs[?OutputKey=='BastionPublicIp'].OutputValue" \
+    --output text)
+
+if ! ssh -i "$IDENTITY" -o StrictHostKeyChecking=no ec2-user@"$BASTION_IP" \
+        "test -f /mnt/programs/Bytecode/${PROGRAM}-0.bc" 2>/dev/null; then
+    echo "ERROR: ${PROGRAM} not found on EFS." >&2
+    echo "  Run: ./upload-program $PROGRAM" >&2
+    exit 1
+fi
+
+OVERRIDES=$(printf \
+    '{"containerOverrides":[{"name":"Container","environment":[{"name":"MPSPDZ_PROTOCOL","value":"%s"},{"name":"MPSPDZ_PROGRAM","value":"%s"},{"name":"MPSPDZ_N_PARTIES","value":"%s"}]}]}' \
+    "$PROTOCOL" "$PROGRAM" "$N_PARTIES")
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+CLUSTER=$(get_output ClusterName)
+SG=$(get_output SecurityGroupId)
+SUBNETS=$(get_output SubnetIds)
+NETWORK="awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG],assignPublicIp=ENABLED}"
+
+ALL_OUTPUTS=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+    --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' \
+    --output text)
+
+printf '#!/bin/sh\n' > log-env.sh
+
+echo "Cleaning up stale Cloud Map registrations..."
+for IDX in $(seq 0 $((N_PARTIES - 1))); do
+    SVC_ARN=$(echo "$ALL_OUTPUTS" | awk -v k="Player${IDX}CloudMapArn" '$1 == k {print $2}')
+    SVC_ID=$(echo "$SVC_ARN" | sed 's|.*/||')
+    STALE=$(aws servicediscovery list-instances --service-id "$SVC_ID" \
+        --query 'Instances[*].Id' --output text 2>/dev/null)
+    for INST in $STALE; do
+        echo "  deregistering stale instance $INST from player${IDX}..."
+        aws servicediscovery deregister-instance --service-id "$SVC_ID" --instance-id "$INST"
+    done
+done
+
+# --- Start player 0 first; others resolve player0.mp-spdz.local to connect ---
+TASKDEF=$(echo "$ALL_OUTPUTS" | awk '$1 == "Player0TaskDef" {print $2}')
+LOG_GROUP=$(aws ecs describe-task-definition --task-definition "$TASKDEF" \
+    --query 'taskDefinition.containerDefinitions[0].logConfiguration.options."awslogs-group"' \
+    --output text)
+echo "LOG_GROUP=$LOG_GROUP" >> log-env.sh
+
+CM_ARN=$(echo "$ALL_OUTPUTS" | awk '$1 == "Player0CloudMapArn" {print $2}')
+CM_SVC_ID=$(echo "$CM_ARN" | sed 's|.*/||')
+
+echo "Starting player0..."
+RUN_TASK_OUT=$(aws ecs run-task \
+    --cluster "$CLUSTER" \
+    --launch-type FARGATE \
+    --task-definition "$TASKDEF" \
+    --network-configuration "$NETWORK" \
+    --overrides "$OVERRIDES" \
+    --output json)
+PLAYER0_ARN=$(printf '%s' "$RUN_TASK_OUT" | python3 -c \
+    "import sys,json; d=json.load(sys.stdin); print(d['tasks'][0]['taskArn'] if d.get('tasks') else '')")
+if [ -z "$PLAYER0_ARN" ]; then
+    REASON=$(printf '%s' "$RUN_TASK_OUT" | python3 -c \
+        "import sys,json; d=json.load(sys.stdin); print(d['failures'][0]['reason'] if d.get('failures') else 'unknown')")
+    echo "ERROR: failed to launch player0: ${REASON}" >&2
+    exit 1
+fi
+echo "  task: $PLAYER0_ARN"
+
+echo "  Waiting for player0 to reach RUNNING..."
+aws ecs wait tasks-running --cluster "$CLUSTER" --tasks "$PLAYER0_ARN"
+
+PRIVATE_IP=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$PLAYER0_ARN" \
+    --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='privateIPv4Address'].value | [0]" \
+    --output text)
+INSTANCE_ID=$(echo "$PLAYER0_ARN" | sed 's|.*/||')
+
+echo "  Registering player0 (IP: $PRIVATE_IP) with Cloud Map..."
+aws servicediscovery register-instance \
+    --service-id "$CM_SVC_ID" \
+    --instance-id "$INSTANCE_ID" \
+    --attributes "AWS_INSTANCE_IPV4=$PRIVATE_IP"
+
+echo "PLAYER0_LOG_STREAM=player0/Container/$INSTANCE_ID" >> log-env.sh
+
+# --- Start players 1..N-1 in parallel ---
+if [ "$N_PARTIES" -gt 1 ]; then
+    echo "Starting players 1..$((N_PARTIES - 1)) in parallel..."
+    ALL_REMAINING_ARNS=""
+    for IDX in $(seq 1 $((N_PARTIES - 1))); do
+        TASKDEF=$(echo "$ALL_OUTPUTS" | awk -v k="Player${IDX}TaskDef" '$1 == k {print $2}')
+        RUN_TASK_OUT=$(aws ecs run-task \
+            --cluster "$CLUSTER" \
+            --launch-type FARGATE \
+            --task-definition "$TASKDEF" \
+            --network-configuration "$NETWORK" \
+            --overrides "$OVERRIDES" \
+            --output json)
+        TASK_ARN=$(printf '%s' "$RUN_TASK_OUT" | python3 -c \
+            "import sys,json; d=json.load(sys.stdin); print(d['tasks'][0]['taskArn'] if d.get('tasks') else '')")
+        if [ -z "$TASK_ARN" ]; then
+            REASON=$(printf '%s' "$RUN_TASK_OUT" | python3 -c \
+                "import sys,json; d=json.load(sys.stdin); print(d['failures'][0]['reason'] if d.get('failures') else 'unknown')")
+            echo "ERROR: failed to launch player${IDX}: ${REASON}" >&2
+            exit 1
+        fi
+        echo "  player${IDX} task: $TASK_ARN"
+        ALL_REMAINING_ARNS="$ALL_REMAINING_ARNS $TASK_ARN"
+        eval "TASK_ARN_${IDX}=$TASK_ARN"
+    done
+
+    echo "  Waiting for players 1..$((N_PARTIES - 1)) to reach RUNNING..."
+    echo "$ALL_REMAINING_ARNS" | xargs aws ecs wait tasks-running --cluster "$CLUSTER" --tasks
+
+    for IDX in $(seq 1 $((N_PARTIES - 1))); do
+        eval "TASK_ARN=\$TASK_ARN_${IDX}"
+        CM_ARN=$(echo "$ALL_OUTPUTS" | awk -v k="Player${IDX}CloudMapArn" '$1 == k {print $2}')
+        CM_SVC_ID=$(echo "$CM_ARN" | sed 's|.*/||')
+
+        PRIVATE_IP=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+            --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='privateIPv4Address'].value | [0]" \
+            --output text)
+        INSTANCE_ID=$(echo "$TASK_ARN" | sed 's|.*/||')
+
+        echo "  Registering player${IDX} (IP: $PRIVATE_IP) with Cloud Map..."
+        aws servicediscovery register-instance \
+            --service-id "$CM_SVC_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --attributes "AWS_INSTANCE_IPV4=$PRIVATE_IP"
+
+        echo "PLAYER${IDX}_LOG_STREAM=player${IDX}/Container/$INSTANCE_ID" >> log-env.sh
+    done
+fi
+
+echo "CLUSTER=$CLUSTER" >> log-env.sh
+echo "ALL_TASK_ARNS=\"$PLAYER0_ARN$ALL_REMAINING_ARNS\"" >> log-env.sh
+echo "N_PARTIES=$N_PARTIES" >> log-env.sh
+
+echo "All players started. Log streams written to log-env.sh."

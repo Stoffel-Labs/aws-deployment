@@ -1,0 +1,28 @@
+#!/bin/sh
+# Stop all running ECS tasks in the given CloudFormation stack's cluster.
+# Use this to free up vCPUs after a failed or stuck run.
+#
+# Usage: ./cleanup-tasks <stack-name>
+
+set -e
+
+STACK="${1:?Usage: $0 <stack-name>}"
+
+CLUSTER=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+    --query "Stacks[0].Outputs[?OutputKey=='ClusterName'].OutputValue" \
+    --output text)
+
+TASK_ARNS=$(aws ecs list-tasks --cluster "$CLUSTER" --desired-status RUNNING \
+    --query 'taskArns' --output text)
+
+if [ -z "$TASK_ARNS" ] || [ "$TASK_ARNS" = "None" ]; then
+    echo "No running tasks."
+    exit 0
+fi
+
+echo "Stopping running tasks in $CLUSTER..."
+for ARN in $TASK_ARNS; do
+    aws ecs stop-task --cluster "$CLUSTER" --task "$ARN" --reason "manual cleanup" \
+        --query 'task.taskArn' --output text
+done
+echo "Done."

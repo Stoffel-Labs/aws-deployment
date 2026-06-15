@@ -1,0 +1,49 @@
+#!/bin/sh
+# Upload per-player inputs to EFS. Each argument is the input string for that
+# player (player 0 first), uploaded as Input-P{i}-0 (MP-SPDZ convention).
+#
+# Usage: ./upload-input <p0-input> <p1-input> ...
+#   e.g. ./upload-input "1 2 3 4" "5 6 7 8" "9 10 11 12"
+
+set -e
+
+[ $# -eq 0 ] && { echo "Usage: $0 <p0-input> <p1-input> ..." >&2; exit 1; }
+
+IDENTITY="$(dirname "$0")/bastion-key"
+STACK="MpSpdzStack"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+BASTION_IP=$(get_output BastionPublicIp)
+if [ -z "$BASTION_IP" ] || [ "$BASTION_IP" = "None" ]; then
+    echo "ERROR: could not retrieve BastionPublicIp from stack $STACK" >&2
+    exit 1
+fi
+
+EFS_ID=$(get_output EfsId)
+
+if ! ssh -i "$IDENTITY" -o StrictHostKeyChecking=no ec2-user@"$BASTION_IP" \
+        "mountpoint -q /mnt/programs 2>/dev/null"; then
+    echo "EFS not mounted on bastion — mounting now..."
+    ssh -i "$IDENTITY" -o StrictHostKeyChecking=no ec2-user@"$BASTION_IP" \
+        "sudo mount -t efs -o tls,iam ${EFS_ID}:/ /mnt/programs"
+fi
+
+ssh -i "$IDENTITY" -o StrictHostKeyChecking=no ec2-user@"$BASTION_IP" \
+    "sudo mkdir -p /mnt/programs/inputs"
+
+IDX=0
+for INPUT in "$@"; do
+    NAME="Input-P${IDX}-0"
+    printf '%s\n' "$INPUT" | ssh -i "$IDENTITY" -o StrictHostKeyChecking=no \
+        "ec2-user@$BASTION_IP" \
+        "sudo tee '/mnt/programs/inputs/${NAME}' > /dev/null"
+    echo "  player${IDX}: $NAME"
+    IDX=$((IDX + 1))
+done
+
+echo "Done."

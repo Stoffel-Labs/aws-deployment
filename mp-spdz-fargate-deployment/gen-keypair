@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+if [ -f bastion-key ]; then
+    echo "bastion-key already exists. Delete it first if you want to regenerate." >&2
+    exit 1
+fi
+
+ssh-keygen -t ed25519 -f bastion-key -N ""
+echo ""
+echo "Generated bastion-key and bastion-key.pub."
+echo "Run 'cdk deploy' to import the public key into EC2 and deploy the stack."
+echo ""
+echo "To compile a program:"
+echo "  ./compile-program Programs/Source/tutorial.mpc"
+echo ""
+echo "To SSH to the bastion directly:"
+echo "  ssh -i bastion-key ec2-user@<BastionPublicIp>"

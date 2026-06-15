@@ -1,6 +1,19 @@
 #!/bin/sh
 set -e
 
+PROGRAM="$1"
+if [ -z "$PROGRAM" ]; then
+    echo "Usage: $0 <program-filename>" >&2
+    echo "  e.g.: $0 client_mul.stflb" >&2
+    echo "" >&2
+    echo "The file must already be on EFS. Upload it first:" >&2
+    echo "  scp program.stflb ec2-user@<BastionPublicIp>:/mnt/programs/" >&2
+    exit 1
+fi
+
+PROGRAM_PATH="/app/programs/$(basename "$PROGRAM")"
+OVERRIDES='{"containerOverrides":[{"name":"Container","environment":[{"name":"STOFFEL_PROGRAM","value":"'"$PROGRAM_PATH"'"}]}]}'
+
 STACK="StoffelVMCoordinatorStack"
 
 get_output() {
@@ -35,6 +48,8 @@ COORD_PUBLIC_IP=$(aws ec2 describe-network-interfaces --network-interface-ids "$
     --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
 echo "  coordinator public IP: $COORD_PUBLIC_IP"
 echo "COORD_PUBLIC_IP=$COORD_PUBLIC_IP" >> client-env.sh
+COORD_INSTANCE_ID=$(echo "$COORD_TASK_ARN" | sed 's|.*/||')
+echo "COORD_LOG_STREAM=coordinator/Container/$COORD_INSTANCE_ID" >> log-env.sh
 
 # --- Purge stale Cloud Map registrations from any previous run ---
 # Each run registers a new instance ID (derived from the task ARN), so old
@@ -70,6 +85,7 @@ PARTY0_ARN=$(aws ecs run-task \
     --launch-type FARGATE \
     --task-definition "$TASKDEF" \
     --network-configuration "$NETWORK" \
+    --overrides "$OVERRIDES" \
     --query 'tasks[0].taskArn' \
     --output text)
 echo "  task: $PARTY0_ARN"
@@ -109,6 +125,7 @@ for IDX in 1 2 3 4; do
         --launch-type FARGATE \
         --task-definition "$TASKDEF" \
         --network-configuration "$NETWORK" \
+        --overrides "$OVERRIDES" \
         --query 'tasks[0].taskArn' \
         --output text)
     echo "  party${IDX} task: $TASK_ARN"
@@ -117,8 +134,7 @@ for IDX in 1 2 3 4; do
 done
 
 echo "  Waiting for parties 1-4 to reach RUNNING..."
-# shellcheck disable=SC2086  # word-splitting on $ALL_REMAINING_ARNS is intentional
-aws ecs wait tasks-running --cluster "$CLUSTER" --tasks $ALL_REMAINING_ARNS
+echo "$ALL_REMAINING_ARNS" | xargs aws ecs wait tasks-running --cluster "$CLUSTER" --tasks
 
 for IDX in 1 2 3 4; do
     eval "TASK_ARN=\$TASK_ARN_${IDX}"
@@ -145,6 +161,9 @@ for IDX in 1 2 3 4; do
     echo "PARTY${IDX}_PUBLIC_IP=$PUBLIC_IP" >> client-env.sh
     echo "PARTY${IDX}_LOG_STREAM=party${IDX}/Container/$INSTANCE_ID" >> log-env.sh
 done
+
+echo "CLUSTER=$CLUSTER" >> log-env.sh
+echo "ALL_TASK_ARNS=\"$PARTY0_ARN$ALL_REMAINING_ARNS\"" >> log-env.sh
 
 echo "All nodes started."
 echo ""

@@ -1,0 +1,42 @@
+#!/bin/sh
+# Compile an MP-SPDZ .mpc program to bytecode using the local submodule.
+# Output is copied to ./programs/Bytecode/ and ./programs/Schedules/.
+#
+# Usage: ./compile-program <program.mpc> [compile.py flags...]
+#   e.g. ./compile-program ../mp-spdz/Programs/Source/tutorial.mpc -R 32
+
+set -e
+
+PROGRAM="${1:?Usage: $0 <program.mpc> [compile.py flags...]}"
+shift
+
+MPSPDZ_DIR="$(cd "$(dirname "$0")/../mp-spdz" 2>/dev/null && pwd)" || true
+if [ -z "$MPSPDZ_DIR" ] || [ ! -f "$MPSPDZ_DIR/compile.py" ]; then
+    echo "ERROR: MP-SPDZ submodule not found. Run: git submodule update --init" >&2
+    exit 1
+fi
+
+BASENAME=$(basename "${PROGRAM%.mpc}")
+
+mkdir -p "$MPSPDZ_DIR/Programs/Source"
+if [ ! -f "$MPSPDZ_DIR/Programs/Source/${BASENAME}.mpc" ]; then
+    cp "$PROGRAM" "$MPSPDZ_DIR/Programs/Source/${BASENAME}.mpc"
+fi
+
+echo "Compiling ${BASENAME}..."
+(cd "$MPSPDZ_DIR" && python3 compile.py "$BASENAME" "$@")
+
+mkdir -p programs/Bytecode programs/Schedules
+
+if ! ls "$MPSPDZ_DIR/Programs/Bytecode/${BASENAME}"-*.bc > /dev/null 2>&1; then
+    echo "ERROR: compilation produced no bytecode for '${BASENAME}'." >&2
+    exit 1
+fi
+cp "$MPSPDZ_DIR/Programs/Bytecode/${BASENAME}"-*.bc programs/Bytecode/
+
+if [ -f "$MPSPDZ_DIR/Programs/Schedules/${BASENAME}.sch" ]; then
+    cp "$MPSPDZ_DIR/Programs/Schedules/${BASENAME}.sch" programs/Schedules/
+fi
+
+echo "Output in programs/Bytecode/ and programs/Schedules/"
+echo "Run: ./upload-program $BASENAME"
