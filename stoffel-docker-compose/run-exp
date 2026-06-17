@@ -2,13 +2,13 @@
 # Run N_ITER benchmark iterations of a Stoffel program and write results to CSV.
 # Metrics are collected from Docker container logs after each run.
 #
-# Usage: ./run-exp <program.stflb> [n_iterations] [--loss <pct>] [--bandwidth <mbit>] [--n-triples <N>] [--n-random <N>]
+# Usage: ./run-exp <program.stflb> [n_iterations] [--loss <pct>] [--bandwidth <mbit>]
 #   e.g. ./run-exp client_mul.stflb 5 --loss 2 --bandwidth 100
 
 set -e
 
 usage() {
-    echo "Usage: $0 <program.stflb> [n_iterations] [--loss <pct>] [--bandwidth <mbit>] [--n-triples <N>] [--n-random <N>]" >&2
+    echo "Usage: $0 <program.stflb> [n_iterations] [--loss <pct>] [--bandwidth <mbit>]" >&2
     exit 1
 }
 
@@ -16,8 +16,6 @@ PROGRAM="${1:?$(usage)}"; shift
 N_ITER=1
 NET_LOSS=""
 NET_BANDWIDTH=""
-N_TRIPLES=""
-N_RANDOM=""
 
 # N_ITER is optional positional arg before any flags
 if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
@@ -27,8 +25,6 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --loss)      NET_LOSS="$2";      shift 2 ;;
         --bandwidth) NET_BANDWIDTH="$2"; shift 2 ;;
-        --n-triples) N_TRIPLES="$2";     shift 2 ;;
-        --n-random)  N_RANDOM="$2";      shift 2 ;;
         *) echo "Unknown option: $1" >&2; usage ;;
     esac
 done
@@ -57,8 +53,6 @@ for i in $(seq 1 "$N_ITER"); do
     NODES_ARGS="$PROGRAM"
     [ -n "$NET_LOSS" ]      && NODES_ARGS="$NODES_ARGS --loss $NET_LOSS"
     [ -n "$NET_BANDWIDTH" ] && NODES_ARGS="$NODES_ARGS --bandwidth $NET_BANDWIDTH"
-    [ -n "$N_TRIPLES" ]     && NODES_ARGS="$NODES_ARGS --n-triples $N_TRIPLES"
-    [ -n "$N_RANDOM" ]      && NODES_ARGS="$NODES_ARGS --n-random $N_RANDOM"
     # shellcheck disable=SC2086
     "$DIR/run-nodes" $NODES_ARGS
 

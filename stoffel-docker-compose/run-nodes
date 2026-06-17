@@ -7,20 +7,16 @@
 
 set -e
 
-usage() { echo "Usage: $0 <program.stflb> [--loss <pct>] [--bandwidth <mbit>] [--n-triples <N>] [--n-random <N>]" >&2; exit 1; }
+usage() { echo "Usage: $0 <program.stflb> [--loss <pct>] [--bandwidth <mbit>]" >&2; exit 1; }
 
 PROGRAM="${1:?$(usage)}"; shift
 
 NET_LOSS=""
 NET_BANDWIDTH=""
-N_TRIPLES=""
-N_RANDOM=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --loss)      NET_LOSS="$2";      shift 2 ;;
         --bandwidth) NET_BANDWIDTH="$2"; shift 2 ;;
-        --n-triples) N_TRIPLES="$2";     shift 2 ;;
-        --n-random)  N_RANDOM="$2";      shift 2 ;;
         *) echo "Unknown option: $1" >&2; usage ;;
     esac
 done
@@ -34,13 +30,9 @@ fi
 export STOFFEL_PROGRAM="/app/programs/$(basename "$PROGRAM")"
 export NET_LOSS
 export NET_BANDWIDTH
-export STOFFEL_N_TRIPLES="$N_TRIPLES"
-export STOFFEL_N_RANDOM="$N_RANDOM"
 
 echo "Starting Stoffel cluster..."
 [ -n "$NET_LOSS" ]      && echo "  packet loss:   ${NET_LOSS}%"
 [ -n "$NET_BANDWIDTH" ] && echo "  bandwidth cap: ${NET_BANDWIDTH} mbit/s"
-[ -n "$N_TRIPLES" ]     && echo "  n-triples:     $N_TRIPLES"
-[ -n "$N_RANDOM" ]      && echo "  n-random:      $N_RANDOM"
 
 docker compose -f "$(dirname "$0")/docker-compose.yml" up -d --force-recreate --build

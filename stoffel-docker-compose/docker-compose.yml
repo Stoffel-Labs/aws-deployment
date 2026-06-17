@@ -42,8 +42,6 @@ x-common-env: &common-env
   STOFFEL_COORD_ADDR: "coordinator.stoffel-coord.local:31415"
   STOFFEL_EXPECTED_CLIENTS: "/app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt"
   STOFFEL_PROGRAM: "${STOFFEL_PROGRAM}"
-  STOFFEL_N_TRIPLES: "${STOFFEL_N_TRIPLES:-}"
-  STOFFEL_N_RANDOM: "${STOFFEL_N_RANDOM:-}"
   STOFFEL_MPC_BACKEND: ${STOFFEL_MPC_BACKEND:-honeybadger}
   STOFFEL_MPC_CURVE: ${STOFFEL_MPC_CURVE:-bls12-381}
   RUST_MIN_STACK: ${RUST_MIN_STACK:-67108864}
