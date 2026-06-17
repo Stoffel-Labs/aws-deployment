@@ -1,0 +1,46 @@
+#!/bin/sh
+# Run a Stoffel client locally against the Docker Compose cluster.
+# Parties expose their RPC ports on localhost:16180-16184.
+#
+# Usage: ./run-client <client_id> [inputs] [client_index]
+#   e.g. ./run-client 0 "1 2 3"
+
+set -e
+
+CLIENT_ID="${1:?Usage: $0 <client_id> [inputs] [client_index]}"
+INPUTS="${2:-}"
+CLIENT_INDEX="${3:-$CLIENT_ID}"
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+IDS_DIR="$(cd "$DIR/../ids" && pwd)"
+BINARY="$DIR/../StoffelVM/target/release/stoffel-run"
+
+if [ ! -f "$BINARY" ]; then
+    echo "Binary not found at $BINARY" >&2
+    echo "  Run: cargo build --release in ../StoffelVM/" >&2
+    exit 1
+fi
+
+SERVERS=""
+i=0
+while [ "$i" -lt 5 ]; do
+    PORT=$((16180 + i))
+    SERVERS="${SERVERS:+$SERVERS,}127.0.0.1:${PORT}"
+    i=$((i + 1))
+done
+
+set -- \
+    --client \
+    --servers "$SERVERS" \
+    --n-parties 5 \
+    --threshold 1 \
+    --off-chain-coord "127.0.0.1:31415" \
+    --cert "${IDS_DIR}/pub/clients/client${CLIENT_ID}.crt" \
+    --key "${IDS_DIR}/priv/clients/client${CLIENT_ID}.der" \
+    --timestamp 0
+
+if [ -n "$INPUTS" ]; then
+    set -- "$@" --inputs "$INPUTS" --client-index "$CLIENT_INDEX"
+fi
+
+RUST_BACKTRACE=1 exec "$BINARY" "$@"
