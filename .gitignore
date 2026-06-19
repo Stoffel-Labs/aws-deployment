@@ -10,3 +10,9 @@ cdk.out
 
 # SSH private key — never commit (generate with ./gen-key)
 aws-key
+
+*.stfl
+*.stflb
+bastion-key*
+*.csv
+*.sh
