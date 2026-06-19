@@ -2,21 +2,23 @@
 # Start the Stoffel MPC cluster locally via Docker Compose.
 # Coordinator and all 5 parties are started fresh on every call.
 #
-# Usage: ./run-nodes <program.stflb> [--loss <pct>] [--bandwidth <mbit>]
-#   e.g. ./run-nodes client_mul.stflb --loss 5 --bandwidth 100
+# Usage: ./run-nodes <program.stflb> [--loss <pct>] [--bandwidth <mbit>] [--input-total <n>]
+#   e.g. ./run-nodes client_mul.stflb --loss 5 --bandwidth 100 --input-total 4
 
 set -e
 
-usage() { echo "Usage: $0 <program.stflb> [--loss <pct>] [--bandwidth <mbit>]" >&2; exit 1; }
+usage() { echo "Usage: $0 <program.stflb> [--loss <pct>] [--bandwidth <mbit>] [--input-total <n>]" >&2; exit 1; }
 
 PROGRAM="${1:?$(usage)}"; shift
 
 NET_LOSS=""
 NET_BANDWIDTH=""
+STOFFEL_CLIENT_INPUT_TOTAL=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --loss)      NET_LOSS="$2";      shift 2 ;;
-        --bandwidth) NET_BANDWIDTH="$2"; shift 2 ;;
+        --loss)        NET_LOSS="$2";                    shift 2 ;;
+        --bandwidth)   NET_BANDWIDTH="$2";               shift 2 ;;
+        --input-total) STOFFEL_CLIENT_INPUT_TOTAL="$2";  shift 2 ;;
         *) echo "Unknown option: $1" >&2; usage ;;
     esac
 done
@@ -30,9 +32,11 @@ fi
 export STOFFEL_PROGRAM="/app/programs/$(basename "$PROGRAM")"
 export NET_LOSS
 export NET_BANDWIDTH
+export STOFFEL_CLIENT_INPUT_TOTAL
 
 echo "Starting Stoffel cluster..."
-[ -n "$NET_LOSS" ]      && echo "  packet loss:   ${NET_LOSS}%"
-[ -n "$NET_BANDWIDTH" ] && echo "  bandwidth cap: ${NET_BANDWIDTH} mbit/s"
+[ -n "$NET_LOSS" ]                    && echo "  packet loss:   ${NET_LOSS}%"
+[ -n "$NET_BANDWIDTH" ]               && echo "  bandwidth cap: ${NET_BANDWIDTH} mbit/s"
+[ -n "$STOFFEL_CLIENT_INPUT_TOTAL" ]  && echo "  input total:   ${STOFFEL_CLIENT_INPUT_TOTAL}"
 
 docker compose -f "$(dirname "$0")/docker-compose.yml" up -d --force-recreate --build

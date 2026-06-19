@@ -2,14 +2,34 @@
 # Run a Stoffel client locally against the Docker Compose cluster.
 # Parties expose their RPC ports on localhost:16180-16184.
 #
-# Usage: ./run-client <client_id> [inputs] [client_index]
-#   e.g. ./run-client 0 "1 2 3"
+# Usage: ./run-client <client_id> [inputs [client_index]] [--outputs N]
+#   Input client:  ./run-client 0 "1 2 3"
+#   Output-only:   ./run-client 0 --outputs 2
 
 set -e
 
-CLIENT_ID="${1:?Usage: $0 <client_id> [inputs] [client_index]}"
-INPUTS="${2:-}"
-CLIENT_INDEX="${3:-$CLIENT_ID}"
+CLIENT_ID="${1:?Usage: $0 <client_id> [inputs [client_index]] [--outputs N]}"
+shift
+
+INPUTS=""
+CLIENT_INDEX=""
+OUTPUTS=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --outputs) OUTPUTS="$2"; shift 2 ;;
+        -*) echo "Unknown option: $1" >&2; exit 1 ;;
+        *)
+            if [ -z "$INPUTS" ]; then
+                INPUTS="$1"
+            else
+                CLIENT_INDEX="$1"
+            fi
+            shift ;;
+    esac
+done
+
+CLIENT_INDEX="${CLIENT_INDEX:-$CLIENT_ID}"
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 IDS_DIR="$(cd "$DIR/../ids" && pwd)"
@@ -41,6 +61,10 @@ set -- \
 
 if [ -n "$INPUTS" ]; then
     set -- "$@" --inputs "$INPUTS" --client-index "$CLIENT_INDEX"
+fi
+
+if [ -n "$OUTPUTS" ]; then
+    set -- "$@" --outputs "$OUTPUTS"
 fi
 
 RUST_BACKTRACE=1 exec "$BINARY" "$@"

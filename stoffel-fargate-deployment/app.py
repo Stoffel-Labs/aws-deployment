@@ -29,6 +29,7 @@ class StoffelVMCoordinatorStack(Stack):
 
     CDK context (pass via --context key=value):
       auth_token      - STOFFEL_AUTH_TOKEN (required)
+      n_inputs        - total client inputs passed to coordinator and nodes (default: 0)
 
     Programs are stored on EFS. To deploy a program:
       1. Generate a key pair:   ./gen-keypair
@@ -171,9 +172,10 @@ class StoffelVMCoordinatorStack(Stack):
             "STOFFEL_EXPECTED_CLIENTS": "/app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt",
             "RUST_LOG": "info",
             "RUST_BACKTRACE": "1",
+            "STOFFEL_SKIP_HOST_WAIT": "true",
         }
 
-        coord_service = self._add_coordinator(cluster, coordinator_image, sg, log_group)
+        coord_task, coord_cm_service = self._add_coordinator(cluster, coordinator_image, sg, log_group)
 
         party_results = [
             self._add_party(i, cluster, party_image, sg, log_group, common_env, file_system, access_point)
@@ -183,7 +185,8 @@ class StoffelVMCoordinatorStack(Stack):
         party_cm_services = [r[1] for r in party_results]
 
         CfnOutput(self, "ClusterName", value=cluster.cluster_name)
-        CfnOutput(self, "CoordServiceName", value=coord_service.service_name)
+        CfnOutput(self, "CoordTaskDef", value=coord_task.task_definition_arn)
+        CfnOutput(self, "CoordCloudMapArn", value=coord_cm_service.service_arn)
         CfnOutput(self, "SecurityGroupId", value=sg.security_group_id)
         CfnOutput(self, "SubnetIds", value=",".join(s.subnet_id for s in vpc.public_subnets))
         CfnOutput(self, "BastionPublicIp", value=bastion.instance_public_ip)
@@ -214,7 +217,7 @@ class StoffelVMCoordinatorStack(Stack):
                 "--server-key", "/app/ids/priv/coord.der",
                 "--n", str(self.N_PARTIES),
                 "--t", str(self.THRESHOLD),
-                "--n-inputs", "2",
+                "--n-inputs", "0",
                 "--output-clients", "/app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt",
                 "--initial-mpc-nodes",
                 ",".join(f"/app/ids/pub/nodes/node{i}.crt" for i in range(self.N_PARTIES)),
@@ -222,31 +225,17 @@ class StoffelVMCoordinatorStack(Stack):
             port_mappings=[
                 ecs.PortMapping(container_port=31415, protocol=ecs.Protocol.TCP),
             ],
-            health_check=ecs.HealthCheck(
-                command=["CMD-SHELL", "netstat -tuln | grep -q ':31415' || exit 1"],
-                interval=Duration.seconds(5),
-                timeout=Duration.seconds(3),
-                retries=10,
-                start_period=Duration.seconds(10),
-            ),
             logging=self._log_driver(log_group, "coordinator"),
         )
-        service = ecs.FargateService(
-            self, "CoordService",
-            cluster=cluster,
-            task_definition=task,
-            desired_count=1,
-            security_groups=[sg],
-            assign_public_ip=True,
-            circuit_breaker=ecs.DeploymentCircuitBreaker(rollback=True),
-            min_healthy_percent=0,
-            cloud_map_options=ecs.CloudMapOptions(
-                name="coordinator",
-                dns_record_type=sd.DnsRecordType.A,
-                dns_ttl=Duration.seconds(10),
-            ),
+        cm_service = sd.Service(
+            self, "CoordCloudMap",
+            namespace=cluster.default_cloud_map_namespace,
+            name="coordinator",
+            dns_record_type=sd.DnsRecordType.A,
+            dns_ttl=Duration.seconds(10),
+            custom_health_check=sd.HealthCheckCustomConfig(failure_threshold=1),
         )
-        return service
+        return task, cm_service
 
     def _add_party(
         self,

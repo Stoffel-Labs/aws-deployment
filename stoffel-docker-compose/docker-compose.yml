@@ -49,6 +49,8 @@ x-common-env: &common-env
   RUST_BACKTRACE: "1"
   NET_LOSS: "${NET_LOSS:-}"
   NET_BANDWIDTH: "${NET_BANDWIDTH:-}"
+  STOFFEL_CLIENT_INPUT_TOTAL: "${STOFFEL_CLIENT_INPUT_TOTAL:-}"
+  STOFFEL_SKIP_HOST_WAIT: "true"
 
 services:
   coordinator:
@@ -71,7 +73,7 @@ services:
       - --t
       - "1"
       - --n-inputs
-      - "2"
+      - "${STOFFEL_CLIENT_INPUT_TOTAL:-0}"
       - --output-clients
       - "/app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt"
       - --initial-mpc-nodes

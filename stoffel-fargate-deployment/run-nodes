@@ -1,18 +1,32 @@
 #!/bin/sh
 set -e
 
-PROGRAM="$1"
-if [ -z "$PROGRAM" ]; then
-    echo "Usage: $0 <program-filename>" >&2
-    echo "  e.g.: $0 client_mul.stflb" >&2
+usage() {
+    echo "Usage: $0 <program-filename> [--input-total <n>]" >&2
+    echo "  e.g.: $0 client_mul.stflb --input-total 4" >&2
     echo "" >&2
     echo "The file must already be on EFS. Upload it first:" >&2
     echo "  scp program.stflb ec2-user@<BastionPublicIp>:/mnt/programs/" >&2
     exit 1
-fi
+}
+
+PROGRAM="${1:?$(usage)}"; shift
+
+N_INPUTS=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --input-total) N_INPUTS="$2"; shift 2 ;;
+        *) echo "Unknown option: $1" >&2; usage ;;
+    esac
+done
 
 PROGRAM_PATH="/app/programs/$(basename "$PROGRAM")"
-OVERRIDES='{"containerOverrides":[{"name":"Container","environment":[{"name":"STOFFEL_PROGRAM","value":"'"$PROGRAM_PATH"'"}]}]}'
+
+if [ -n "$N_INPUTS" ]; then
+    OVERRIDES='{"containerOverrides":[{"name":"Container","environment":[{"name":"STOFFEL_PROGRAM","value":"'"$PROGRAM_PATH"'"},{"name":"STOFFEL_CLIENT_INPUT_TOTAL","value":"'"$N_INPUTS"'"}]}]}'
+else
+    OVERRIDES='{"containerOverrides":[{"name":"Container","environment":[{"name":"STOFFEL_PROGRAM","value":"'"$PROGRAM_PATH"'"}]}]}'
+fi
 
 STACK="StoffelVMCoordinatorStack"
 
@@ -25,7 +39,6 @@ get_output() {
 CLUSTER=$(get_output ClusterName)
 SG=$(get_output SecurityGroupId)
 SUBNETS=$(get_output SubnetIds)
-COORD_SVC=$(get_output CoordServiceName)
 NETWORK="awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG],assignPublicIp=ENABLED}"
 
 ALL_OUTPUTS=$(aws cloudformation describe-stacks --stack-name "$STACK" \
@@ -37,26 +50,22 @@ printf '#!/bin/sh\n' > client-env.sh
 # Reset log env file
 printf '#!/bin/sh\n' > log-env.sh
 
-# Look up coordinator public IP
-echo "Looking up coordinator public IP..."
-COORD_TASK_ARN=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$COORD_SVC" \
-    --query 'taskArns[0]' --output text)
-COORD_ENI=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$COORD_TASK_ARN" \
-    --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='networkInterfaceId'].value | [0]" \
-    --output text)
-COORD_PUBLIC_IP=$(aws ec2 describe-network-interfaces --network-interface-ids "$COORD_ENI" \
-    --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
-echo "  coordinator public IP: $COORD_PUBLIC_IP"
-echo "COORD_PUBLIC_IP=$COORD_PUBLIC_IP" >> client-env.sh
-COORD_INSTANCE_ID=$(echo "$COORD_TASK_ARN" | sed 's|.*/||')
-echo "COORD_LOG_STREAM=coordinator/Container/$COORD_INSTANCE_ID" >> log-env.sh
-
 # --- Purge stale Cloud Map registrations from any previous run ---
 # Each run registers a new instance ID (derived from the task ARN), so old
 # instances are never automatically removed. If they linger, DNS returns both
 # the dead IP and the new one, and parties may pick the wrong address and fail
 # to reach the bootnode, causing the 120 s session-announcement timeout.
 echo "Cleaning up stale Cloud Map registrations..."
+
+COORD_CM_ARN=$(echo "$ALL_OUTPUTS" | awk '$1 == "CoordCloudMapArn" {print $2}')
+COORD_CM_ID=$(echo "$COORD_CM_ARN" | sed 's|.*/||')
+STALE=$(aws servicediscovery list-instances --service-id "$COORD_CM_ID" \
+    --query 'Instances[*].Id' --output text 2>/dev/null)
+for INST in $STALE; do
+    echo "  deregistering stale instance $INST from coordinator service..."
+    aws servicediscovery deregister-instance --service-id "$COORD_CM_ID" --instance-id "$INST"
+done
+
 for IDX in 0 1 2 3 4; do
     SVC_ARN=$(echo "$ALL_OUTPUTS" | awk -v k="Party${IDX}CloudMapArn" '$1 == k {print $2}')
     SVC_ID=$(echo "$SVC_ARN" | sed 's|.*/||')
@@ -67,6 +76,57 @@ for IDX in 0 1 2 3 4; do
         aws servicediscovery deregister-instance --service-id "$SVC_ID" --instance-id "$INST"
     done
 done
+
+# --- Start coordinator ---
+COORD_TASKDEF=$(echo "$ALL_OUTPUTS" | awk '$1 == "CoordTaskDef" {print $2}')
+
+# Read the task definition command; update --n-inputs if --input-total was given.
+COORD_OVERRIDES=$(aws ecs describe-task-definition \
+    --task-definition "$COORD_TASKDEF" \
+    --query 'taskDefinition.containerDefinitions[0].command' \
+    --output json | python3 -c "
+import json, sys
+cmd = json.load(sys.stdin)
+n = sys.argv[1]
+if n and '--n-inputs' in cmd:
+    idx = cmd.index('--n-inputs')
+    cmd[idx + 1] = n
+print(json.dumps({'containerOverrides': [{'name': 'Container', 'command': cmd}]}))
+" "$N_INPUTS")
+
+echo "Starting coordinator..."
+COORD_TASK_ARN=$(aws ecs run-task \
+    --cluster "$CLUSTER" \
+    --launch-type FARGATE \
+    --task-definition "$COORD_TASKDEF" \
+    --network-configuration "$NETWORK" \
+    --overrides "$COORD_OVERRIDES" \
+    --query 'tasks[0].taskArn' \
+    --output text)
+echo "  task: $COORD_TASK_ARN"
+
+echo "  Waiting for coordinator to reach RUNNING..."
+aws ecs wait tasks-running --cluster "$CLUSTER" --tasks "$COORD_TASK_ARN"
+
+COORD_PRIVATE_IP=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$COORD_TASK_ARN" \
+    --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='privateIPv4Address'].value | [0]" \
+    --output text)
+COORD_ENI=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$COORD_TASK_ARN" \
+    --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='networkInterfaceId'].value | [0]" \
+    --output text)
+COORD_PUBLIC_IP=$(aws ec2 describe-network-interfaces --network-interface-ids "$COORD_ENI" \
+    --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+
+COORD_INSTANCE_ID=$(echo "$COORD_TASK_ARN" | sed 's|.*/||')
+echo "  Registering coordinator (IP: $COORD_PRIVATE_IP) with Cloud Map service $COORD_CM_ID..."
+aws servicediscovery register-instance \
+    --service-id "$COORD_CM_ID" \
+    --instance-id "$COORD_INSTANCE_ID" \
+    --attributes "AWS_INSTANCE_IPV4=$COORD_PRIVATE_IP"
+
+echo "  coordinator public IP: $COORD_PUBLIC_IP"
+echo "COORD_PUBLIC_IP=$COORD_PUBLIC_IP" >> client-env.sh
+echo "COORD_LOG_STREAM=coordinator/Container/$COORD_INSTANCE_ID" >> log-env.sh
 
 # --- Start party0 first and register it with Cloud Map ---
 # Parties 1-4 resolve party0's address via DNS (party0.stoffel-coord.local),
@@ -163,7 +223,7 @@ for IDX in 1 2 3 4; do
 done
 
 echo "CLUSTER=$CLUSTER" >> log-env.sh
-echo "ALL_TASK_ARNS=\"$PARTY0_ARN$ALL_REMAINING_ARNS\"" >> log-env.sh
+echo "ALL_TASK_ARNS=\"$COORD_TASK_ARN $PARTY0_ARN$ALL_REMAINING_ARNS\"" >> log-env.sh
 
 echo "All nodes started."
 echo ""
