@@ -1,0 +1,15 @@
+#!/bin/sh
+# Copy a compiled .stflb program into ./programs/ so it can be picked up
+# by the Docker Compose volume mount at /app/programs/.
+#
+# Usage: ./upload-program <program.stflb>
+
+set -e
+
+FILE="${1:?Usage: $0 <program.stflb>}"
+DIR="$(dirname "$0")"
+
+mkdir -p "$DIR/programs"
+cp "$FILE" "$DIR/programs/$(basename "$FILE")"
+echo "Copied to programs/$(basename "$FILE")"
+echo "Run: ./run-nodes $(basename "$FILE")"
