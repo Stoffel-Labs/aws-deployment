@@ -1,0 +1,31 @@
+#!/bin/sh
+# Upload a compiled program to the shared S3 bucket that every party region
+# downloads from at run-nodes time (replaces the bastion/EFS scp flow used
+# by stoffel-fargate-deployment — S3 is reachable from every region).
+set -e
+
+. "$(dirname "$0")/regions"
+
+usage() {
+    echo "Usage: $0 <local-program>" >&2
+    echo "  e.g.: $0 client_mul.stflb" >&2
+    exit 1
+}
+
+LOCAL_FILE="${1:?$(usage)}"
+[ -f "$LOCAL_FILE" ] || { echo "ERROR: $LOCAL_FILE not found" >&2; exit 1; }
+
+STACK="StoffelCoordinatorStack"
+
+BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$COORD_REGION" \
+    --query "Stacks[0].Outputs[?OutputKey=='ProgramsBucketName'].OutputValue" \
+    --output text)
+
+if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
+    echo "ERROR: could not retrieve ProgramsBucketName from stack $STACK in $COORD_REGION" >&2
+    exit 1
+fi
+
+echo "Uploading $(basename "$LOCAL_FILE") to s3://$BUCKET/ ..."
+aws s3 cp "$LOCAL_FILE" "s3://$BUCKET/$(basename "$LOCAL_FILE")" --region "$COORD_REGION"
+echo "Done. Run './run-nodes $(basename "$LOCAL_FILE")' to start the nodes."

@@ -25,4 +25,11 @@ for ARN in $TASK_ARNS; do
     aws ecs stop-task --cluster "$CLUSTER" --task "$ARN" --reason "manual cleanup" \
         --query 'task.taskArn' --output text
 done
+
+# stop-task returns as soon as the stop is requested; the task still holds its
+# vCPU reservation until it finishes DEPROVISIONING (ENI detach, etc.), which
+# can take a minute or more. Wait for that to complete so a run-nodes retry
+# right after this script doesn't hit the account vCPU limit again.
+echo "Waiting for tasks to fully stop..."
+echo "$TASK_ARNS" | xargs aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks
 echo "Done."

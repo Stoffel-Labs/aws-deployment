@@ -1,0 +1,408 @@
+#!/bin/sh
+set -e
+
+# Must match N_PARTIES / THRESHOLD in app.py: min_shares(t) = 2t+1 is the
+# smallest party count the deployed coordinator/nodes can run a session with.
+DEPLOYED_PARTIES=10
+THRESHOLD=1
+
+. "$(dirname "$0")/regions"
+
+# Unique per-run docker container/log-stream name suffix.
+RUN_ID="$(date +%s)-$$"
+CONTAINER_NAME="stoffel-run"
+
+usage() {
+    echo "Usage: $0 <program-filename> [--input-total <n>] [--backend avss|honeybadger] [--curve <curve>] [--num-parties <n>] [--threshold <t>]" >&2
+    echo "  e.g.: $0 client_mul.stflb --input-total 4 --backend avss --curve bls12-381 --num-parties 5 --threshold 1" >&2
+    echo "" >&2
+    echo "$DEPLOYED_PARTIES parties are always deployed, one per region (see regions);" >&2
+    echo "--num-parties selects how many of them (party0..party<n-1>) are actually started" >&2
+    echo "(default: 5). --threshold sets t (default: $THRESHOLD); --num-parties must be >= 2t+1." >&2
+    echo "" >&2
+    echo "The file must already be uploaded to S3 first:" >&2
+    echo "  ./upload-program program.stflb" >&2
+    echo "" >&2
+    echo "Set STOFFEL_AUTH_TOKEN in the environment to pass an auth token to every node." >&2
+    exit 1
+}
+
+PROGRAM="${1:?$(usage)}"; shift
+
+N_INPUTS=""
+STOFFEL_MPC_BACKEND="honeybadger"
+STOFFEL_MPC_CURVE="bls12-381"
+NUM_PARTIES="5"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --input-total) N_INPUTS="$2"; shift 2 ;;
+        --curve)       STOFFEL_MPC_CURVE="$2"; shift 2 ;;
+        --num-parties) NUM_PARTIES="$2"; shift 2 ;;
+        --threshold)   THRESHOLD="$2"; shift 2 ;;
+        --backend)
+            case "$2" in
+                avss|honeybadger) STOFFEL_MPC_BACKEND="$2" ;;
+                *) echo "Invalid backend: $2 (expected avss or honeybadger)" >&2; usage ;;
+            esac
+            shift 2 ;;
+        *) echo "Unknown option: $1" >&2; usage ;;
+    esac
+done
+
+case "$THRESHOLD" in
+    ''|*[!0-9]*) echo "Invalid --threshold: $THRESHOLD (expected an integer)" >&2; usage ;;
+esac
+MIN_PARTIES=$((2 * THRESHOLD + 1))
+
+case "$NUM_PARTIES" in
+    ''|*[!0-9]*) echo "Invalid --num-parties: $NUM_PARTIES (expected an integer)" >&2; usage ;;
+esac
+if [ "$NUM_PARTIES" -lt "$MIN_PARTIES" ] || [ "$NUM_PARTIES" -gt "$DEPLOYED_PARTIES" ]; then
+    echo "Invalid --num-parties: $NUM_PARTIES (must be between $MIN_PARTIES and $DEPLOYED_PARTIES for threshold $THRESHOLD)" >&2
+    usage
+fi
+LAST_PARTY=$((NUM_PARTIES - 1))
+
+PROGRAM_BASENAME="$(basename "$PROGRAM")"
+PROGRAM_PATH="/app/programs/$PROGRAM_BASENAME"
+
+NODE_CERTS=""
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    NODE_CERTS="${NODE_CERTS:+$NODE_CERTS,}/app/ids/pub/nodes/node${IDX}.crt"
+    IDX=$((IDX + 1))
+done
+
+get_output() {
+    # get_output <stack> <region> <output-key>
+    aws cloudformation describe-stacks --stack-name "$1" --region "$2" \
+        --query "Stacks[0].Outputs[?OutputKey=='$3'].OutputValue" \
+        --output text
+}
+
+# send_ssm <region> <instance-id> <script-file> — sends the script as a
+# single AWS-RunShellScript command (via --cli-input-json so multi-line
+# scripts with quotes don't have to survive being embedded in a CLI arg) and
+# prints the command id.
+send_ssm() {
+    PARAMS_FILE=$(mktemp)
+    python3 -c "
+import json, sys
+region, instance, script_file = sys.argv[1:4]
+with open(script_file) as f:
+    script = f.read()
+print(json.dumps({
+    'DocumentName': 'AWS-RunShellScript',
+    'InstanceIds': [instance],
+    'Parameters': {'commands': [script]},
+}))
+" "$@" > "$PARAMS_FILE"
+    aws ssm send-command --region "$1" --cli-input-json "file://$PARAMS_FILE" \
+        --query 'Command.CommandId' --output text
+    rm -f "$PARAMS_FILE"
+}
+
+# wait_ssm <region> <instance-id> <command-id> <label> [<max-wait-seconds>] —
+# polls until the command finishes; on failure, prints its stdout/stderr and
+# exits. `aws ssm wait command-executed` caps out at 100s (5s x 20 attempts),
+# nowhere near enough for a docker pull of a multi-hundred-MB image, so this
+# polls manually with a much longer default budget.
+wait_ssm() {
+    REGION="$1"; INSTANCE="$2"; CMD_ID="$3"; LABEL="$4"; MAX_WAIT="${5:-1800}"
+    ELAPSED=0
+    while :; do
+        STATUS=$(aws ssm get-command-invocation --region "$REGION" --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+            --query 'Status' --output text 2>/dev/null || echo "Pending")
+        case "$STATUS" in
+            Success) return 0 ;;
+            Cancelled|TimedOut|Failed|Cancelling)
+                echo "ERROR: SSM command failed for $LABEL ($INSTANCE / $REGION): $STATUS" >&2
+                aws ssm get-command-invocation --region "$REGION" --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                    --query '[StandardOutputContent,StandardErrorContent]' --output text >&2
+                exit 1
+                ;;
+        esac
+        if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
+            echo "ERROR: SSM command for $LABEL ($INSTANCE / $REGION) still $STATUS after ${MAX_WAIT}s, giving up" >&2
+            exit 1
+        fi
+        sleep 5
+        ELAPSED=$((ELAPSED + 5))
+    done
+}
+
+# ping_snippet <self-name> <addr-book> — shell snippet (single line, safe to
+# embed inside a single-quoted `docker run ... -c '...'` argument) that pings
+# every entity in <addr-book> except <self-name>. Every address in the book
+# was resolved from a CloudFormation output before any node was started (see
+# "Resolve stack outputs" below), so this can run immediately after a node's
+# main work finishes — no waiting on a file to show up, unlike the Fargate
+# cross-region deployment's AddressWaiter mechanism.
+ping_snippet() {
+    python3 -c "
+import sys
+self_name, addr_book = sys.argv[1], sys.argv[2]
+parts = []
+for pair in addr_book.split():
+    name, ip = pair.split('=', 1)
+    if name == self_name:
+        continue
+    parts.append(f'echo \"Pinging {name}...\"; ping -c 4 {ip} || true;')
+print(' '.join(parts))
+" "$1" "$2"
+}
+
+# --- Resolve coordinator stack outputs ---
+COORD_STACK="StoffelCoordinatorStack"
+COORD_PUBLIC_IP=$(get_output "$COORD_STACK" "$COORD_REGION" PublicIp)
+COORD_INSTANCE=$(get_output "$COORD_STACK" "$COORD_REGION" InstanceId)
+COORD_IMAGE=$(get_output "$COORD_STACK" "$COORD_REGION" ImageUri)
+COORD_LOG_GROUP=$(get_output "$COORD_STACK" "$COORD_REGION" LogGroupName)
+BUCKET=$(get_output "$COORD_STACK" "$COORD_REGION" ProgramsBucketName)
+
+if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
+    echo "ERROR: could not resolve StoffelCoordinatorStack outputs in $COORD_REGION — has it been deployed?" >&2
+    exit 1
+fi
+
+# --- Resolve each active party stack's outputs. All addresses (Elastic IPs)
+# are known immediately here — they were allocated at `cdk deploy` time, not
+# at container-start time — so there's no need to launch anything before
+# building the full peer address book below. ---
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    REGION=$(party_region "$IDX")
+    STACK="StoffelParty${IDX}Stack"
+    eval "REGION_$IDX=\$REGION"
+    eval "PUBLIC_IP_$IDX=\$(get_output \"\$STACK\" \"\$REGION\" PublicIp)"
+    eval "INSTANCE_$IDX=\$(get_output \"\$STACK\" \"\$REGION\" InstanceId)"
+    eval "IMAGE_$IDX=\$(get_output \"\$STACK\" \"\$REGION\" ImageUri)"
+    eval "LOG_GROUP_$IDX=\$(get_output \"\$STACK\" \"\$REGION\" LogGroupName)"
+    eval "CHECK=\$PUBLIC_IP_$IDX"
+    if [ -z "$CHECK" ] || [ "$CHECK" = "None" ]; then
+        echo "ERROR: could not resolve $STACK outputs in $REGION — has it been deployed?" >&2
+        exit 1
+    fi
+    IDX=$((IDX + 1))
+done
+
+# --- Build the full-mesh peer address book up front ---
+ADDR_BOOK="coord=$COORD_PUBLIC_IP"
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    eval "IP=\$PUBLIC_IP_$IDX"
+    ADDR_BOOK="$ADDR_BOOK node${IDX}=$IP"
+    IDX=$((IDX + 1))
+done
+
+COORD_ADDR="${COORD_PUBLIC_IP}:31415"
+PARTY0_PUBLIC_IP="$PUBLIC_IP_0"
+BOOTSTRAP_ADDR="${PARTY0_PUBLIC_IP}:9000"
+
+# Reset client/log env files
+printf '#!/bin/sh\n' > client-env.sh
+printf '#!/bin/sh\n' > log-env.sh
+echo "ACTIVE_PARTIES=\"$(seq 0 "$LAST_PARTY" | tr '\n' ' ')\"" >> log-env.sh
+
+echo "Starting Stoffel EC2 cross-region cluster..."
+[ -n "$N_INPUTS" ] && echo "  input total:   ${N_INPUTS}"
+echo "  backend:       ${STOFFEL_MPC_BACKEND}"
+echo "  curve:         ${STOFFEL_MPC_CURVE}"
+echo "  parties:       ${NUM_PARTIES} of ${DEPLOYED_PARTIES}"
+echo "  threshold:     ${THRESHOLD}"
+
+{
+    echo "COORD_PUBLIC_IP=$COORD_PUBLIC_IP"
+    echo "PARTY0_PUBLIC_IP=$PARTY0_PUBLIC_IP"
+} >> client-env.sh
+{
+    echo "COORD_REGION=$COORD_REGION"
+    echo "COORD_LOG_GROUP=$COORD_LOG_GROUP"
+    echo "COORD_LOG_STREAM=coordinator/$RUN_ID"
+    echo "COORD_INSTANCE=$COORD_INSTANCE"
+} >> log-env.sh
+
+# build_coord_script <n-inputs> <backend> <num-parties> <threshold> \
+#   <node-certs> <log-group> <region> <stream> <image> <auth-token> \
+#   <container-name> <pings>
+build_coord_script() {
+    python3 -c "
+import sys
+(n_inputs, backend, num_parties, threshold, node_certs, log_group, region, stream, image,
+ auth_token, container, pings) = sys.argv[1:13]
+run_coord_args = (
+    '--addr 0.0.0.0 '
+    '--hash 0000000000000000000000000000000000000000000000000000000000000000 '
+    '--server-cert /app/ids/pub/coord.crt --server-key /app/ids/priv/coord.der '
+    f'--n {num_parties} --t {threshold} --n-inputs {n_inputs or 0} --backend {backend} '
+    '--output-clients /app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt '
+    f'--initial-mpc-nodes {node_certs}'
+)
+entry = f'/app/run-coord {run_coord_args}; EXIT=\$?; {pings} exit \$EXIT'
+registry = image.split('/')[0]
+lines = [
+    'set -e',
+    f'aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {registry}',
+    f'docker pull {image}',
+    f'docker rm -f {container} >/dev/null 2>&1 || true',
+    f'docker run -d --name {container} --network host --log-driver awslogs '
+    f'--log-opt awslogs-region={region} --log-opt awslogs-group={log_group} --log-opt awslogs-stream={stream} '
+    f'-e STOFFEL_AUTH_TOKEN=\"{auth_token}\" '
+    f'--entrypoint /bin/bash {image} -c \'{entry}\'',
+]
+print('\n'.join(lines))
+" "$@"
+}
+
+echo "Starting coordinator in $COORD_REGION..."
+COORD_SCRIPT=$(mktemp)
+build_coord_script "$N_INPUTS" "$STOFFEL_MPC_BACKEND" "$NUM_PARTIES" "$THRESHOLD" "$NODE_CERTS" \
+    "$COORD_LOG_GROUP" "$COORD_REGION" "coordinator/$RUN_ID" "$COORD_IMAGE" "${STOFFEL_AUTH_TOKEN:-}" \
+    "$CONTAINER_NAME" "$(ping_snippet coord "$ADDR_BOOK")" > "$COORD_SCRIPT"
+COORD_CMD_ID=$(send_ssm "$COORD_REGION" "$COORD_INSTANCE" "$COORD_SCRIPT")
+rm -f "$COORD_SCRIPT"
+wait_ssm "$COORD_REGION" "$COORD_INSTANCE" "$COORD_CMD_ID" "coordinator"
+echo "  started (command $COORD_CMD_ID)"
+
+# build_party_script <party-id> <bind-port> <rpc-port> <bucket> <program-basename> \
+#   <program-path> <n-inputs> <backend> <curve> <num-parties> <threshold> \
+#   <coord-addr> <bootstrap-addr-or-empty> <log-group> <region> <stream> \
+#   <image> <auth-token> <container-name> <pings>
+build_party_script() {
+    python3 -c "
+import sys
+(party_id, bind_port, rpc_port, bucket, base, path, n_inputs, backend, curve, num_parties,
+ threshold, coord_addr, bootstrap_addr, log_group, region, stream, image, auth_token,
+ container, pings) = sys.argv[1:21]
+
+env = {
+    'STOFFEL_AUTH_TOKEN': auth_token,
+    'STOFFEL_N_PARTIES': num_parties,
+    'STOFFEL_THRESHOLD': threshold,
+    'STOFFEL_ENTRY': 'main',
+    'RUST_LOG': 'info',
+    'RUST_BACKTRACE': '1',
+    'STOFFEL_SKIP_HOST_WAIT': 'true',
+    'STOFFEL_ROLE': 'leader' if party_id == '0' else 'party',
+    'STOFFEL_PARTY_ID': party_id,
+    'STOFFEL_BIND_ADDR': f'0.0.0.0:{bind_port}',
+    'STOFFEL_RPC_ADDR': f'0.0.0.0:{rpc_port}',
+    'STOFFEL_CERT': f'/app/ids/pub/nodes/node{party_id}.crt',
+    'STOFFEL_KEY': f'/app/ids/priv/nodes/node{party_id}.der',
+    'STOFFEL_PROGRAM': path,
+    'STOFFEL_MPC_BACKEND': backend,
+    'STOFFEL_MPC_CURVE': curve,
+    'STOFFEL_COORD_ADDR': coord_addr,
+}
+if n_inputs:
+    env['STOFFEL_CLIENT_INPUT_TOTAL'] = n_inputs
+if bootstrap_addr:
+    env['STOFFEL_BOOTSTRAP_ADDR'] = bootstrap_addr
+
+env_flags = ' '.join(f'-e {k}=\"{v}\"' for k, v in env.items())
+
+entry = f'/app/entrypoint.sh; EXIT=\$?; {pings} ' \
+    'MEM=\$(cat /sys/fs/cgroup/memory.peak 2>/dev/null' \
+    ' || cat /sys/fs/cgroup/memory/memory.max_usage_in_bytes 2>/dev/null' \
+    ' || cat /sys/fs/cgroup/memory.current 2>/dev/null);' \
+    ' [ -n \"\$MEM\" ] && echo \"PEAK_MEM_BYTES: \$MEM\";' \
+    ' exit \$EXIT'
+
+registry = image.split('/')[0]
+lines = [
+    'set -e',
+    f'aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {registry}',
+    f'mkdir -p /home/ec2-user/programs',
+    f'aws s3 cp s3://{bucket}/{base} /home/ec2-user/programs/{base}',
+    f'docker pull {image}',
+    f'docker rm -f {container} >/dev/null 2>&1 || true',
+    f'docker run -d --name {container} --network host --log-driver awslogs '
+    f'--log-opt awslogs-region={region} --log-opt awslogs-group={log_group} --log-opt awslogs-stream={stream} '
+    f'-v /home/ec2-user/programs:/app/programs:ro '
+    f'{env_flags} '
+    f'--entrypoint /bin/bash {image} -c \'{entry}\'',
+]
+print('\n'.join(lines))
+" "$@"
+}
+
+echo "Starting party0 in $(party_region 0)..."
+PARTY0_SCRIPT=$(mktemp)
+build_party_script "0" "9000" "16180" "$BUCKET" "$PROGRAM_BASENAME" "$PROGRAM_PATH" "$N_INPUTS" \
+    "$STOFFEL_MPC_BACKEND" "$STOFFEL_MPC_CURVE" "$NUM_PARTIES" "$THRESHOLD" "$COORD_ADDR" "" \
+    "$LOG_GROUP_0" "$REGION_0" "party0/$RUN_ID" "$IMAGE_0" "${STOFFEL_AUTH_TOKEN:-}" "$CONTAINER_NAME" \
+    "$(ping_snippet node0 "$ADDR_BOOK")" > "$PARTY0_SCRIPT"
+PARTY0_CMD_ID=$(send_ssm "$REGION_0" "$INSTANCE_0" "$PARTY0_SCRIPT")
+rm -f "$PARTY0_SCRIPT"
+wait_ssm "$REGION_0" "$INSTANCE_0" "$PARTY0_CMD_ID" "party0"
+echo "  started (command $PARTY0_CMD_ID)"
+
+{
+    echo "PARTY0_REGION=$REGION_0"
+    echo "PARTY0_LOG_GROUP=$LOG_GROUP_0"
+    echo "PARTY0_LOG_STREAM=party0/$RUN_ID"
+    echo "PARTY0_INSTANCE=$INSTANCE_0"
+} >> log-env.sh
+
+# --- Start parties 1..LAST_PARTY across their regions. party0 needs a head
+# start (its P2P bootstrap listener has to actually be up before others
+# dial it), but since every address is already known, there's no
+# ENI/public-IP polling needed the way the Fargate deployment required —
+# every SSM command below can be fired without waiting on anything but
+# party0's container having started. ---
+if [ "$LAST_PARTY" -ge 1 ]; then
+    echo "Starting parties 1-${LAST_PARTY} (one per region)..."
+    IDX=1
+    while [ "$IDX" -le "$LAST_PARTY" ]; do
+        eval "REGION=\$REGION_$IDX"
+        eval "INSTANCE=\$INSTANCE_$IDX"
+        eval "IMAGE=\$IMAGE_$IDX"
+        eval "LOG_GROUP=\$LOG_GROUP_$IDX"
+        BIND_PORT=$((9000 + IDX))
+        RPC_PORT=$((16180 + IDX))
+        SCRIPT=$(mktemp)
+        build_party_script "$IDX" "$BIND_PORT" "$RPC_PORT" "$BUCKET" "$PROGRAM_BASENAME" "$PROGRAM_PATH" \
+            "$N_INPUTS" "$STOFFEL_MPC_BACKEND" "$STOFFEL_MPC_CURVE" "$NUM_PARTIES" "$THRESHOLD" "$COORD_ADDR" \
+            "$BOOTSTRAP_ADDR" "$LOG_GROUP" "$REGION" "party${IDX}/$RUN_ID" "$IMAGE" "${STOFFEL_AUTH_TOKEN:-}" \
+            "$CONTAINER_NAME" "$(ping_snippet "node${IDX}" "$ADDR_BOOK")" > "$SCRIPT"
+        CMD_ID=$(send_ssm "$REGION" "$INSTANCE" "$SCRIPT")
+        rm -f "$SCRIPT"
+        eval "CMD_ID_$IDX=\$CMD_ID"
+        echo "  party${IDX} ($REGION) command: $CMD_ID"
+        IDX=$((IDX + 1))
+    done
+
+    echo "  Waiting for parties 1-${LAST_PARTY} to start..."
+    IDX=1
+    while [ "$IDX" -le "$LAST_PARTY" ]; do
+        eval "REGION=\$REGION_$IDX"
+        eval "INSTANCE=\$INSTANCE_$IDX"
+        eval "CMD_ID=\$CMD_ID_$IDX"
+        wait_ssm "$REGION" "$INSTANCE" "$CMD_ID" "party${IDX}"
+        eval "REGION_OUT=\$REGION_$IDX"
+        eval "LOG_GROUP_OUT=\$LOG_GROUP_$IDX"
+        eval "INSTANCE_OUT=\$INSTANCE_$IDX"
+        {
+            echo "PARTY${IDX}_REGION=$REGION_OUT"
+            echo "PARTY${IDX}_LOG_GROUP=$LOG_GROUP_OUT"
+            echo "PARTY${IDX}_LOG_STREAM=party${IDX}/$RUN_ID"
+            echo "PARTY${IDX}_INSTANCE=$INSTANCE_OUT"
+        } >> log-env.sh
+        IDX=$((IDX + 1))
+    done
+fi
+
+# client-env.sh needs every active party's public IP, not just party0's.
+IDX=1
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    eval "IP=\$PUBLIC_IP_$IDX"
+    echo "PARTY${IDX}_PUBLIC_IP=$IP" >> client-env.sh
+    IDX=$((IDX + 1))
+done
+
+echo "All nodes started."
+echo ""
+echo "Client environment written to client-env.sh — run './run-client <client_id> <inputs>' to start a client."
+echo "Log streams written to log-env.sh."
+echo "Every node pings its peers immediately after finishing its work (addresses were known up front) —"
+echo "run './ping-matrix' once the run has finished to build the RTT matrix."

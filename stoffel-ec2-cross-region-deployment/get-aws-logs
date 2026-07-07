@@ -1,0 +1,52 @@
+#!/bin/sh
+# Show CloudWatch log group/stream info for the most recent run-nodes run,
+# across all regions involved (coordinator + every active party). Every
+# node logs via the Docker `awslogs` driver straight to the log group its
+# CDK stack created (see the LogGroupName output) — no per-task log group
+# discovery needed the way the Fargate deployment requires.
+#
+# Usage:
+#   ./get-aws-logs                      # uses log-env.sh from the last run-nodes
+#   ./get-aws-logs <region> <log-group>  # ad-hoc: list recent streams in one log group
+set -e
+
+list_streams() {
+    # list_streams <region> <log-group>
+    aws logs describe-log-streams --region "$1" --log-group-name "$2" \
+        --order-by LastEventTime --descending --max-items 5 \
+        --query 'logStreams[*].logStreamName' --output text 2>/dev/null | tr '\t' '\n'
+}
+
+if [ $# -eq 2 ]; then
+    echo "Recent log streams for $2 ($1):"
+    list_streams "$1" "$2"
+    exit 0
+fi
+
+if [ $# -ne 0 ]; then
+    echo "Usage: $0 [<region> <log-group>]" >&2
+    exit 1
+fi
+
+if [ ! -f log-env.sh ]; then
+    echo "log-env.sh not found — run ./run-nodes first, or pass <region> <log-group> explicitly." >&2
+    exit 1
+fi
+. ./log-env.sh
+
+echo "Coordinator ($COORD_REGION):"
+echo "  instance:   $COORD_INSTANCE"
+echo "  log group:  $COORD_LOG_GROUP"
+echo "  log stream: $COORD_LOG_STREAM"
+
+for IDX in $ACTIVE_PARTIES; do
+    eval "REGION=\$PARTY${IDX}_REGION"
+    eval "INSTANCE=\$PARTY${IDX}_INSTANCE"
+    eval "LOG_GROUP=\$PARTY${IDX}_LOG_GROUP"
+    eval "STREAM=\$PARTY${IDX}_LOG_STREAM"
+    [ -z "$REGION" ] && continue
+    echo "party${IDX} ($REGION):"
+    echo "  instance:   $INSTANCE"
+    echo "  log group:  $LOG_GROUP"
+    echo "  log stream: $STREAM"
+done

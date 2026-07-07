@@ -1,0 +1,51 @@
+#!/bin/sh
+# List CloudWatch log groups for the most recent run-nodes run, across all
+# regions involved (coordinator + every active party).
+#
+# Usage:
+#   ./get-aws-logs                  # uses log-env.sh from the last run-nodes
+#   ./get-aws-logs <region> <cluster>  # ad-hoc: list log groups for one cluster
+set -e
+
+list_for_cluster() {
+    # list_for_cluster <region> <cluster>
+    REGION="$1"
+    CLUSTER="$2"
+    TASKS=$(aws ecs list-tasks --region "$REGION" --cluster "$CLUSTER" --query 'taskArns' --output text)
+    [ -z "$TASKS" ] && return 0
+    TASK_DEFS=$(aws ecs describe-tasks --region "$REGION" --cluster "$CLUSTER" --tasks $TASKS \
+        --query 'tasks[*].taskDefinitionArn' --output text)
+    for DEF in $TASK_DEFS; do
+        aws ecs describe-task-definition --region "$REGION" --task-definition "$DEF" \
+            --query 'taskDefinition.containerDefinitions[*].logConfiguration.options."awslogs-group"' \
+            --output text
+    done
+}
+
+if [ $# -eq 2 ]; then
+    echo "Log groups for $2 ($1):"
+    list_for_cluster "$1" "$2" | tr '\t' '\n' | sort | uniq
+    exit 0
+fi
+
+if [ $# -ne 0 ]; then
+    echo "Usage: $0 [<region> <cluster>]" >&2
+    exit 1
+fi
+
+if [ ! -f log-env.sh ]; then
+    echo "log-env.sh not found — run ./run-nodes first, or pass <region> <cluster> explicitly." >&2
+    exit 1
+fi
+. ./log-env.sh
+
+echo "Coordinator ($COORD_REGION / $COORD_CLUSTER):"
+list_for_cluster "$COORD_REGION" "$COORD_CLUSTER" | tr '\t' '\n' | sort | uniq
+
+for IDX in $ACTIVE_PARTIES; do
+    eval "REGION=\$PARTY${IDX}_REGION"
+    eval "CLUSTER=\$PARTY${IDX}_CLUSTER"
+    [ -z "$REGION" ] && continue
+    echo "party${IDX} ($REGION / $CLUSTER):"
+    list_for_cluster "$REGION" "$CLUSTER" | tr '\t' '\n' | sort | uniq
+done

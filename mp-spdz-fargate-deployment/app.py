@@ -27,7 +27,7 @@ class MpSpdzStack(Stack):
     as container-environment overrides.
 
     CDK context (pass via --context key=value):
-      n_max          - max parties to pre-provision (default: 5)
+      n_max          - max parties to pre-provision (default: 10)
       mpspdz_cpu     - Fargate CPU units per task (default: 1024)
       mpspdz_memory  - Fargate memory MiB per task (default: 2048)
 
@@ -47,7 +47,7 @@ class MpSpdzStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        n_max = int(self.node.try_get_context("n_max") or "5")
+        n_max = int(self.node.try_get_context("n_max") or "10")
         cpu = int(self.node.try_get_context("mpspdz_cpu") or "1024")
         memory = int(self.node.try_get_context("mpspdz_memory") or "2048")
 

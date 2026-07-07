@@ -19,9 +19,7 @@ fi
 BASENAME=$(basename "${PROGRAM%.mpc}")
 
 mkdir -p "$MPSPDZ_DIR/Programs/Source"
-if [ ! -f "$MPSPDZ_DIR/Programs/Source/${BASENAME}.mpc" ]; then
-    cp "$PROGRAM" "$MPSPDZ_DIR/Programs/Source/${BASENAME}.mpc"
-fi
+cp "$PROGRAM" "$MPSPDZ_DIR/Programs/Source/${BASENAME}.mpc"
 
 echo "Compiling ${BASENAME}..."
 (cd "$MPSPDZ_DIR" && python3 compile.py "$BASENAME" "$@")

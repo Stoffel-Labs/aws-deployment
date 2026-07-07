@@ -1,0 +1,222 @@
+#!/bin/sh
+set -e
+
+. "$(dirname "$0")/regions"
+
+PROGRAM="${1:?Usage: $0 <program-filename> [n-iterations]}"
+N_ITER="${2:-1}"
+CSV="results.csv"
+CONTAINER_NAME="stoffel-run"
+
+BUCKET=$(aws cloudformation describe-stacks --stack-name StoffelCoordinatorStack --region "$COORD_REGION" \
+    --query "Stacks[0].Outputs[?OutputKey=='ProgramsBucketName'].OutputValue" \
+    --output text)
+
+if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
+    echo "ERROR: could not retrieve ProgramsBucketName from StoffelCoordinatorStack in $COORD_REGION" >&2
+    exit 1
+fi
+
+if ! aws s3api head-object --region "$COORD_REGION" --bucket "$BUCKET" --key "$(basename "$PROGRAM")" >/dev/null 2>&1; then
+    echo "ERROR: $(basename "$PROGRAM") not found in s3://$BUCKET/." >&2
+    echo "  Run: ./upload-program $PROGRAM" >&2
+    exit 1
+fi
+
+# wait_for_container <region> <instance> — same mechanism as ping-matrix:
+# `docker wait` blocks server-side until the container exits, so once the
+# SSM command completes, every log line (including PEAK_MEM_BYTES /
+# BENCH_* markers) is already in CloudWatch.
+wait_for_container() {
+    REGION="$1"; INSTANCE="$2"
+    PARAMS_FILE=$(mktemp)
+    python3 -c "
+import json, sys
+instance, container = sys.argv[1:3]
+print(json.dumps({
+    'DocumentName': 'AWS-RunShellScript',
+    'InstanceIds': [instance],
+    'Parameters': {'commands': [f'docker wait {container} >/dev/null 2>&1 || true']},
+}))
+" "$INSTANCE" "$CONTAINER_NAME" > "$PARAMS_FILE"
+    CMD_ID=$(aws ssm send-command --region "$REGION" --cli-input-json "file://$PARAMS_FILE" \
+        --query 'Command.CommandId' --output text)
+    rm -f "$PARAMS_FILE"
+
+    ELAPSED=0
+    while :; do
+        STATUS=$(aws ssm get-command-invocation --region "$REGION" --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+            --query 'Status' --output text 2>/dev/null || echo "Pending")
+        case "$STATUS" in
+            Success) return 0 ;;
+            Cancelled|TimedOut|Failed|Cancelling)
+                echo "WARNING: docker wait command ended as $STATUS on $INSTANCE ($REGION)" >&2
+                return 0
+                ;;
+        esac
+        if [ "$ELAPSED" -ge 7200 ]; then
+            echo "WARNING: still waiting on $INSTANCE ($REGION) after 2h, giving up" >&2
+            return 0
+        fi
+        sleep 5
+        ELAPSED=$((ELAPSED + 5))
+    done
+}
+
+for i in $(seq 1 $N_ITER); do
+    echo "=== Iteration $i ==="
+
+    ./run-nodes "$PROGRAM"
+
+    . ./log-env.sh
+    N_NODES=$(echo "$ACTIVE_PARTIES" | wc -w | tr -d ' ')
+
+    if [ "$i" -eq 1 ]; then
+        {
+            printf 'iter'
+            for j in $ACTIVE_PARTIES; do
+                printf ',node%d_total,node%d_mem,node%d_pp,node%d_exec' "$j" "$j" "$j" "$j"
+            done
+            printf ',client_0,client_1'
+            printf ',round_preprocessing,round_input_mask_reservation,round_input_collection,round_mpc_execution,round_output_distribution'
+            printf '\n'
+        } > "$CSV"
+    fi
+
+    CLIENT_START_TS=$(python3 -c "import time; print(int(time.time()*1000))")
+    { ./run-client 0 0 0; python3 -c "import time; print(int(time.time()*1000))" > "/tmp/client0_end_$$_$i"; } &
+    PID0=$!
+    { ./run-client 1 1 1; python3 -c "import time; print(int(time.time()*1000))" > "/tmp/client1_end_$$_$i"; } &
+    PID1=$!
+    wait $PID0
+    wait $PID1
+
+    echo "Waiting for node containers to stop..."
+    WAIT_PIDS=""
+    wait_for_container "$COORD_REGION" "$COORD_INSTANCE" &
+    WAIT_PIDS="$WAIT_PIDS $!"
+    for j in $ACTIVE_PARTIES; do
+        eval "REGION=\$PARTY${j}_REGION"
+        eval "INSTANCE=\$PARTY${j}_INSTANCE"
+        wait_for_container "$REGION" "$INSTANCE" &
+        WAIT_PIDS="$WAIT_PIDS $!"
+    done
+    for PID in $WAIT_PIDS; do
+        wait "$PID"
+    done
+
+    row="$i"
+    for j in $ACTIVE_PARTIES; do
+        eval "REGION=\$PARTY${j}_REGION"
+        eval "LOG_GROUP=\$PARTY${j}_LOG_GROUP"
+        eval "STREAM=\$PARTY${j}_LOG_STREAM"
+
+        FIRST_TS=$(aws logs get-log-events --region "$REGION" \
+            --log-group-name "$LOG_GROUP" \
+            --log-stream-name "$STREAM" \
+            --start-from-head \
+            --limit 1 \
+            --query 'events[0].timestamp' \
+            --output text)
+
+        LAST_TS=$(aws logs get-log-events --region "$REGION" \
+            --log-group-name "$LOG_GROUP" \
+            --log-stream-name "$STREAM" \
+            --limit 1 \
+            --query 'events[0].timestamp' \
+            --output text)
+
+        if [ "$FIRST_TS" = "None" ] || [ "$LAST_TS" = "None" ]; then
+            DURATION="N/A"
+            MEM="N/A"
+            PP="N/A"
+            EXEC="N/A"
+        else
+            DURATION=$(python3 -c "print(f'{($LAST_TS - $FIRST_TS) / 1000.0:.3f}')")
+
+            MEM_LINE=$(aws logs filter-log-events --region "$REGION" \
+                --log-group-name "$LOG_GROUP" \
+                --log-stream-names "$STREAM" \
+                --filter-pattern '"PEAK_MEM_BYTES"' \
+                --start-time "$FIRST_TS" \
+                --end-time "$((LAST_TS + 60000))" \
+                --query 'events[-1].message' \
+                --output text 2>/dev/null)
+            MEM=$(echo "$MEM_LINE" | python3 -c "
+import sys, re
+m = re.search(r'PEAK_MEM_BYTES: (\d+)', sys.stdin.read())
+print(f'{int(m.group(1)) / 1024 / 1024:.1f}' if m else 'N/A')
+")
+
+            PP_LINE=$(aws logs filter-log-events --region "$REGION" \
+                --log-group-name "$LOG_GROUP" \
+                --log-stream-names "$STREAM" \
+                --filter-pattern '"BENCH_PP_SECS"' \
+                --start-time "$FIRST_TS" \
+                --end-time "$((LAST_TS + 60000))" \
+                --query 'events[-1].message' \
+                --output text 2>/dev/null)
+            PP=$(echo "$PP_LINE" | python3 -c "
+import sys, re
+m = re.search(r'BENCH_PP_SECS: (\S+)', sys.stdin.read())
+print(m.group(1) if m else 'N/A')
+")
+
+            EXEC_LINE=$(aws logs filter-log-events --region "$REGION" \
+                --log-group-name "$LOG_GROUP" \
+                --log-stream-names "$STREAM" \
+                --filter-pattern '"BENCH_EXEC_SECS"' \
+                --start-time "$FIRST_TS" \
+                --end-time "$((LAST_TS + 60000))" \
+                --query 'events[-1].message' \
+                --output text 2>/dev/null)
+            EXEC=$(echo "$EXEC_LINE" | python3 -c "
+import sys, re
+m = re.search(r'BENCH_EXEC_SECS: (\S+)', sys.stdin.read())
+print(m.group(1) if m else 'N/A')
+")
+        fi
+
+        row="$row,$DURATION,$MEM,$PP,$EXEC"
+    done
+
+    CLIENT0_END_TS=$(cat "/tmp/client0_end_$$_$i")
+    CLIENT1_END_TS=$(cat "/tmp/client1_end_$$_$i")
+    CLIENT0_DURATION=$(python3 -c "print(f'{($CLIENT0_END_TS - $CLIENT_START_TS) / 1000.0:.3f}')")
+    CLIENT1_DURATION=$(python3 -c "print(f'{($CLIENT1_END_TS - $CLIENT_START_TS) / 1000.0:.3f}')")
+    row="$row,$CLIENT0_DURATION,$CLIENT1_DURATION"
+
+    ROUND_TIMES="N/A,N/A,N/A,N/A,N/A"
+    if [ -n "${COORD_LOG_STREAM:-}" ]; then
+        ROUND_MSGS=$(aws logs filter-log-events --region "$COORD_REGION" \
+            --log-group-name "$COORD_LOG_GROUP" \
+            --log-stream-names "$COORD_LOG_STREAM" \
+            --filter-pattern '"BENCH_ROUND"' \
+            --query 'events[*].message' \
+            --output json 2>/dev/null)
+        ROUND_TIMES=$(echo "$ROUND_MSGS" | python3 -c "
+import sys, re, json
+rounds = ['Preprocessing', 'InputMaskReservation', 'InputCollection', 'MPCExecution', 'OutputDistribution', 'ProgramFinished']
+try:
+    messages = json.load(sys.stdin)
+except Exception:
+    messages = []
+ts = {}
+for msg in messages:
+    m = re.search(r'BENCH_ROUND: (\w+) ts=(\d+)', msg)
+    if m:
+        ts[m.group(1)] = int(m.group(2))
+results = []
+for i in range(len(rounds) - 1):
+    t0, t1 = ts.get(rounds[i]), ts.get(rounds[i+1])
+    results.append(f'{(t1-t0)/1000.0:.3f}' if t0 is not None and t1 is not None else 'N/A')
+print(','.join(results))
+")
+    fi
+    row="$row,$ROUND_TIMES"
+
+    echo "$row" >> "$CSV"
+    echo "  -> $row"
+done
+
+echo "Results written to $CSV"

@@ -1,0 +1,198 @@
+#!/bin/sh
+set -e
+
+usage() {
+    echo "Usage: $0 [log-env-file] [output-csv]" >&2
+    echo "  Reads task/log info from log-env.sh (written by ./run-nodes) and" >&2
+    echo "  aggregates each container's full-mesh ping output into an RTT matrix," >&2
+    echo "  written as CSV with a header row of name/region (e.g. coord/us-east-1)." >&2
+    echo "  Row/column 0 is the coordinator, row/column i+1 is node i. Cell (i, j)" >&2
+    echo "  is the RTT row-entity i measured pinging column-entity j, kept distinct" >&2
+    echo "  from (j, i) since routes can be asymmetric." >&2
+    echo "  (default log-env-file: log-env.sh, default output: ping-matrix.csv)" >&2
+    echo "" >&2
+    echo "  The coordinator task never stops on its own, so its ping sweep can't be" >&2
+    echo "  awaited the way party tasks are — this polls its log stream instead," >&2
+    echo "  up to 5 minutes, and warns if the sweep still looks incomplete." >&2
+    exit 1
+}
+
+case "$1" in -h|--help) usage ;; esac
+
+LOG_ENV="${1:-log-env.sh}"
+OUT_CSV="${2:-ping-matrix.csv}"
+
+[ -f "$LOG_ENV" ] || { echo "ERROR: $LOG_ENV not found. Run ./run-nodes first." >&2; exit 1; }
+. "$LOG_ENV"
+
+[ -n "$COORD_LOG_GROUP" ] || { echo "ERROR: COORD_LOG_GROUP not set in $LOG_ENV" >&2; exit 1; }
+[ -n "$COORD_TASK_ARN" ] || { echo "ERROR: COORD_TASK_ARN not set in $LOG_ENV" >&2; exit 1; }
+
+# Each stack (coordinator + one per party region) is its own CloudFormation
+# stack with its own cluster and log group, so waits/fetches all need an
+# explicit --region instead of a single shared CLUSTER/LOG_GROUP. Party tasks
+# run one program and exit, so waiting for them to stop is enough to
+# guarantee their ping output (written by their entry_point right before
+# exit — see app.py) is complete. The coordinator keeps running indefinitely
+# (it stays up to serve further sessions), so it never reaches tasks-stopped;
+# its ping sweep is polled for directly further down instead.
+echo "Waiting for party tasks to stop (so their ping output is complete)..."
+WAIT_PIDS=""
+IDX=0
+while [ "$IDX" -le 9 ]; do
+    eval "TASK_ARN=\$PARTY${IDX}_TASK_ARN"
+    if [ -n "$TASK_ARN" ]; then
+        eval "REGION=\$PARTY${IDX}_REGION"
+        eval "CLUSTER=\$PARTY${IDX}_CLUSTER"
+        aws ecs wait tasks-stopped --region "$REGION" --cluster "$CLUSTER" --tasks "$TASK_ARN" &
+        WAIT_PIDS="$WAIT_PIDS $!"
+    fi
+    IDX=$((IDX + 1))
+done
+for PID in $WAIT_PIDS; do
+    wait "$PID"
+done
+
+RAW=$(mktemp)
+trap 'rm -f "$RAW"' EXIT
+
+# Pull every log line from a stream (paginating through get-log-events) and
+# tag each one with the entity name it came from, e.g. "coord\t<message>",
+# appending to the given output file.
+fetch_stream() {
+    LABEL="$1"
+    REGION="$2"
+    LOG_GROUP="$3"
+    STREAM="$4"
+    OUTFILE="$5"
+    TOKEN=""
+    while :; do
+        if [ -z "$TOKEN" ]; then
+            PAGE=$(aws logs get-log-events --region "$REGION" --log-group-name "$LOG_GROUP" --log-stream-name "$STREAM" \
+                --start-from-head --limit 10000 --output json)
+        else
+            PAGE=$(aws logs get-log-events --region "$REGION" --log-group-name "$LOG_GROUP" --log-stream-name "$STREAM" \
+                --start-from-head --limit 10000 --next-token "$TOKEN" --output json)
+        fi
+        echo "$PAGE" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for e in data['events']:
+    print('$LABEL\t' + e['message'])
+" >> "$OUTFILE"
+        NEXT=$(echo "$PAGE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('nextForwardToken',''))")
+        COUNT=$(echo "$PAGE" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['events']))")
+        [ "$COUNT" = "0" ] && break
+        [ "$NEXT" = "$TOKEN" ] && break
+        TOKEN="$NEXT"
+    done
+}
+
+echo "Fetching ping log lines..."
+
+# The coordinator pings every active party exactly once (see app.py), so its
+# sweep is done once its log stream has that many "Pinging ..." lines. Since
+# the coordinator task itself never stops, poll for that instead of waiting
+# on task state, capped at 5 minutes.
+set -- $ACTIVE_PARTIES
+EXPECTED_PINGS=$#
+TAB="$(printf '\t')"
+COORD_RAW=$(mktemp)
+echo "  coordinator..."
+# Waiting for the coordinator's ping sweep doesn't make sense right now: the
+# coordinator task never stops on its own, so its post-run ping loop (see
+# app.py) never runs, and this poll would just spin for the full 5 minutes
+# every time. Commented out until the coordinator actually terminates and
+# pings; fetch once instead so the row is simply blank in the meantime.
+# ATTEMPT=0
+# while :; do
+#     : > "$COORD_RAW"
+#     fetch_stream "coord" "$COORD_REGION" "$COORD_LOG_GROUP" "$COORD_LOG_STREAM" "$COORD_RAW"
+#     GOT=$(grep -c -F "coord${TAB}Pinging " "$COORD_RAW") || GOT=0
+#     [ "$GOT" -ge "$EXPECTED_PINGS" ] && break
+#     ATTEMPT=$((ATTEMPT + 1))
+#     if [ "$ATTEMPT" -ge 60 ]; then
+#         echo "WARNING: coordinator ping sweep still incomplete after 5m ($GOT/$EXPECTED_PINGS pings seen) — coord row may have gaps" >&2
+#         break
+#     fi
+#     sleep 5
+# done
+fetch_stream "coord" "$COORD_REGION" "$COORD_LOG_GROUP" "$COORD_LOG_STREAM" "$COORD_RAW"
+cat "$COORD_RAW" >> "$RAW"
+rm -f "$COORD_RAW"
+
+IDX=0
+while [ "$IDX" -le 9 ]; do
+    eval "STREAM=\$PARTY${IDX}_LOG_STREAM"
+    if [ -n "$STREAM" ]; then
+        eval "REGION=\$PARTY${IDX}_REGION"
+        eval "LOG_GROUP=\$PARTY${IDX}_LOG_GROUP"
+        echo "  node${IDX}..."
+        fetch_stream "node${IDX}" "$REGION" "$LOG_GROUP" "$STREAM" "$RAW"
+    fi
+    IDX=$((IDX + 1))
+done
+
+# log-env.sh assigns COORD_REGION/PARTY<i>_REGION as plain (non-exported)
+# shell vars, so they wouldn't reach the python3 subprocess's environment —
+# collect them into a "name=region" list and pass it as an argument instead.
+REGIONS="coord=$COORD_REGION"
+IDX=0
+while [ "$IDX" -le 9 ]; do
+    eval "R=\$PARTY${IDX}_REGION"
+    [ -n "$R" ] && REGIONS="$REGIONS node${IDX}=$R"
+    IDX=$((IDX + 1))
+done
+
+python3 -c "
+import csv, re, sys
+
+entries = []  # (source, message)
+with open(sys.argv[2]) as f:
+    for line in f:
+        source, _, message = line.rstrip('\n').partition('\t')
+        if source:
+            entries.append((source, message))
+
+node_indices = sorted(
+    {int(m.group(1)) for src, _ in entries if (m := re.fullmatch(r'node(\d+)', src))}
+)
+entities = ['coord'] + [f'node{i}' for i in node_indices]
+
+region_map = dict(pair.split('=', 1) for pair in sys.argv[3].split() if '=' in pair)
+header = [f'{e}/{region_map.get(e, \"\")}' for e in entities]
+
+# Each container's entry_point echoes 'Pinging <name>...' using the same
+# 'coord'/'nodeN' names it read from the shared address book, so no name
+# mapping is needed.
+def normalize_target(target):
+    return target if target == 'coord' or re.fullmatch(r'node\d+', target) else None
+
+rtts = {}  # (source, target) -> avg rtt ms
+pending_target = None
+for source, message in entries:
+    m = re.match(r'Pinging (.+)\.\.\.$', message)
+    if m:
+        pending_target = normalize_target(m.group(1))
+        continue
+    m = re.search(r'rtt min/avg/max/mdev = [\d.]+/([\d.]+)/[\d.]+/[\d.]+ ms', message)
+    if m and pending_target:
+        rtts[(source, pending_target)] = float(m.group(1))
+        pending_target = None
+
+def cell(i, j):
+    # (i, j) is the RTT that entities[i] measured pinging entities[j] — kept
+    # distinct from (j, i) since routes can be asymmetric.
+    if i == j:
+        return ''
+    rtt = rtts.get((entities[i], entities[j]))
+    return f'{rtt:.3f}' if rtt is not None else ''
+
+with open(sys.argv[1], 'w', newline='') as f:
+    writer = csv.writer(f)
+    writer.writerow(header)
+    for i in range(len(entities)):
+        writer.writerow([cell(i, j) for j in range(len(entities))])
+
+print(f'Wrote {len(entities)}x{len(entities)} RTT matrix to {sys.argv[1]}')
+" "$OUT_CSV" "$RAW" "$REGIONS"

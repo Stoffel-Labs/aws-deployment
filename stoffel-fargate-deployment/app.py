@@ -40,7 +40,7 @@ class StoffelVMCoordinatorStack(Stack):
     Clients run externally (e.g. on a laptop). See run-client.
     """
 
-    N_PARTIES = 5
+    N_PARTIES = 10
     THRESHOLD = 1
     NAMESPACE = "stoffel-coord.local"
     PROGRAM_MOUNT = "/app/programs"
@@ -79,7 +79,7 @@ class StoffelVMCoordinatorStack(Stack):
         party_image = ecs.ContainerImage.from_asset(
             "../StoffelVM",
             platform=ecr_assets.Platform.LINUX_AMD64,
-            file="Dockerfile.benchmark",
+            file="Dockerfile.benchmark-flexible",
         )
 
         # Off-chain coordinator
@@ -92,11 +92,13 @@ class StoffelVMCoordinatorStack(Stack):
         sg = ec2.SecurityGroup(self, "SG", vpc=vpc, allow_all_outbound=True)
         cidr = ec2.Peer.ipv4(vpc.vpc_cidr_block)
         # Internal ports: party gossip/bind
-        for port in [9000, 9001, 9002, 9003, 9004, 10000]:
+        for port in [9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009, 10000]:
             sg.add_ingress_rule(cidr, ec2.Port.tcp(port))
             sg.add_ingress_rule(cidr, ec2.Port.udp(port))
+        # ICMP echo (ping) between nodes, for RTT measurement
+        sg.add_ingress_rule(cidr, ec2.Port.icmp_ping())
         # External ports: coordinator and party RPC ports reachable by clients outside the VPC
-        for port in [31415, 16180, 16181, 16182, 16183, 16184]:
+        for port in [31415, 16180, 16181, 16182, 16183, 16184, 16185, 16186, 16187, 16188, 16189]:
             sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(port))
 
         log_group = logs.LogGroup(
@@ -169,7 +171,7 @@ class StoffelVMCoordinatorStack(Stack):
             "STOFFEL_THRESHOLD": str(self.THRESHOLD),
             "STOFFEL_ENTRY": "main",
             "STOFFEL_COORD_ADDR": coord_addr,
-            "STOFFEL_EXPECTED_CLIENTS": "/app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt",
+        #    "STOFFEL_EXPECTED_CLIENTS": "/app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt",
             "RUST_LOG": "info",
             "RUST_BACKTRACE": "1",
             "STOFFEL_SKIP_HOST_WAIT": "true",
@@ -210,6 +212,9 @@ class StoffelVMCoordinatorStack(Stack):
         task.add_container(
             "Container",
             image=image,
+            environment={
+                "STOFFEL_N_PARTIES": str(self.N_PARTIES),
+            },
             command=[
                 "--addr", "0.0.0.0",
                 "--hash", "0000000000000000000000000000000000000000000000000000000000000000",
@@ -218,9 +223,25 @@ class StoffelVMCoordinatorStack(Stack):
                 "--n", str(self.N_PARTIES),
                 "--t", str(self.THRESHOLD),
                 "--n-inputs", "0",
+                "--backend", "honeybadger",
                 "--output-clients", "/app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt",
                 "--initial-mpc-nodes",
                 ",".join(f"/app/ids/pub/nodes/node{i}.crt" for i in range(self.N_PARTIES)),
+            ],
+            # entry_point wraps the coordinator binary so that, once it exits,
+            # it pings every party for RTT measurement (mirrors the party
+            # containers' post-run ping loop). "run-coord" is a $0 placeholder
+            # so that "command" lands in "$@" starting at $1.
+            entry_point=[
+                "/bin/bash", "-c",
+                '/app/run-coord "$@"; EXIT=$?; '
+                "sleep 10; "
+                "for i in $(seq 0 $((STOFFEL_N_PARTIES - 1))); do "
+                '  echo "Pinging party$i..."; '
+                "  ping -c 4 party$i.stoffel-coord.local || true; "
+                "done; "
+                "exit $EXIT",
+                "run-coord",
             ],
             port_mappings=[
                 ecs.PortMapping(container_port=31415, protocol=ecs.Protocol.TCP),
@@ -301,6 +322,14 @@ class StoffelVMCoordinatorStack(Stack):
             entry_point=[
                 "/bin/bash", "-c",
                 "/app/entrypoint.sh; EXIT=$?; "
+                "sleep 10; "
+                'echo "Pinging coordinator..."; '
+                "ping -c 4 coordinator.stoffel-coord.local || true; "
+                "for i in $(seq 0 $((STOFFEL_N_PARTIES - 1))); do "
+                '  [ "$i" = "$STOFFEL_PARTY_ID" ] && continue; '
+                '  echo "Pinging party$i..."; '
+                "  ping -c 4 party$i.stoffel-coord.local || true; "
+                "done; "
                 "MEM=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null"
                 " || cat /sys/fs/cgroup/memory/memory.max_usage_in_bytes 2>/dev/null"
                 " || cat /sys/fs/cgroup/memory.current 2>/dev/null);"

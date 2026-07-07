@@ -2,37 +2,49 @@
 # Start the Stoffel MPC cluster locally via Docker Compose.
 # Coordinator and all 5 parties are started fresh on every call.
 #
-# Usage: ./run-nodes <program.stflb> [--loss <pct>] [--bandwidth <mbit>]
-#   e.g. ./run-nodes client_mul.stflb --loss 5 --bandwidth 100
+# Usage: ./run-nodes <program.stflb> [--loss <pct>] [--bandwidth <mbit>] [--delay <ms>]
+#   e.g. ./run-nodes client_mul.stflb --loss 5 --bandwidth 100 --delay 20
 
 set -e
 
-usage() { echo "Usage: $0 <program.stflb> [--loss <pct>] [--bandwidth <mbit>]" >&2; exit 1; }
+usage() { echo "Usage: $0 <program.stflb> [--loss <pct>] [--bandwidth <mbit>] [--delay <ms>]" >&2; exit 1; }
 
 PROGRAM="${1:?$(usage)}"; shift
 
 NET_LOSS=""
 NET_BANDWIDTH=""
+NET_DELAY=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --loss)      NET_LOSS="$2";       shift 2 ;;
         --bandwidth) NET_BANDWIDTH="$2";  shift 2 ;;
+        --delay)     NET_DELAY="$2";      shift 2 ;;
         *) echo "Unknown option: $1" >&2; usage ;;
     esac
 done
 
-if [ ! -f "$(dirname "$0")/programs/$(basename "$PROGRAM")" ]; then
-    echo "ERROR: $(basename "$PROGRAM") not found in ./programs/" >&2
-    echo "  Run: ./upload-program $PROGRAM" >&2
-    exit 1
+PROGRAMS_DIR="$(dirname "$0")/programs"
+BASENAME="$(basename "$PROGRAM")"
+if [ ! -f "$PROGRAMS_DIR/$BASENAME" ]; then
+    if [ -f "$PROGRAM" ]; then
+        mkdir -p "$PROGRAMS_DIR"
+        cp "$PROGRAM" "$PROGRAMS_DIR/$BASENAME"
+        echo "Copied $BASENAME to programs/"
+    else
+        echo "ERROR: $BASENAME not found in ./programs/" >&2
+        echo "  Run: ./upload-program $PROGRAM" >&2
+        exit 1
+    fi
 fi
 
 export STOFFEL_PROGRAM="/app/programs/$(basename "$PROGRAM")"
 export NET_LOSS
 export NET_BANDWIDTH
+export NET_DELAY
 
 echo "Starting Stoffel cluster..."
 [ -n "$NET_LOSS" ]      && echo "  packet loss:   ${NET_LOSS}%"
 [ -n "$NET_BANDWIDTH" ] && echo "  bandwidth cap: ${NET_BANDWIDTH} mbit/s"
+[ -n "$NET_DELAY" ]     && echo "  network delay: ${NET_DELAY} ms"
 
 docker compose -f "$(dirname "$0")/docker-compose.yml" up -d --force-recreate --build

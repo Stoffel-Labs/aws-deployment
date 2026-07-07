@@ -1,0 +1,72 @@
+#!/bin/sh
+# Tail CloudWatch logs for the coordinator or a party, using log-env.sh from
+# the last run-nodes run.
+#
+# Usage:
+#   ./tail-logs coord            # coordinator logs
+#   ./tail-logs node0            # party 0 logs
+#   ./tail-logs node0 node2 coord  # multiple targets, tailed in parallel
+#
+# Any extra args are passed through to `aws logs tail`, e.g.:
+#   ./tail-logs coord --since 10m --follow
+set -e
+
+if [ ! -f log-env.sh ]; then
+    echo "log-env.sh not found — run ./run-nodes first." >&2
+    exit 1
+fi
+. ./log-env.sh
+
+usage() {
+    echo "Usage: $0 <coord|node0|node1|node2|node3|node4> [...] [-- extra aws logs tail args]" >&2
+    exit 1
+}
+
+[ $# -eq 0 ] && usage
+
+TARGETS=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        coord)
+            TARGETS="$TARGETS coord"
+            shift
+            ;;
+        node[0-9]|node[0-9][0-9])
+            TARGETS="$TARGETS $1"
+            shift
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+[ -z "$TARGETS" ] && usage
+
+PIDS=""
+for TARGET in $TARGETS; do
+    if [ "$TARGET" = "coord" ]; then
+        REGION="$COORD_REGION"
+        GROUP="$COORD_LOG_GROUP"
+    else
+        IDX=$(echo "$TARGET" | sed 's/^node//')
+        eval "REGION=\$PARTY${IDX}_REGION"
+        eval "GROUP=\$PARTY${IDX}_LOG_GROUP"
+    fi
+
+    if [ -z "$REGION" ] || [ -z "$GROUP" ]; then
+        echo "No log info for $TARGET (not in ACTIVE_PARTIES=$ACTIVE_PARTIES?)" >&2
+        continue
+    fi
+
+    if [ "$(echo "$TARGETS" | wc -w)" -gt 1 ]; then
+        echo "==> $TARGET ($REGION / $GROUP) <=="
+        (aws logs tail "$GROUP" --region "$REGION" "$@" | sed "s/^/[$TARGET] /") &
+        PIDS="$PIDS $!"
+    else
+        echo "==> $TARGET ($REGION / $GROUP) <=="
+        aws logs tail "$GROUP" --region "$REGION" "$@"
+    fi
+done
+
+[ -n "$PIDS" ] && wait $PIDS

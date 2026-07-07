@@ -13,9 +13,19 @@ PROTOCOL="${2:?Usage: $0 <program> <protocol> <n_parties>}"
 N_PARTIES="${3:?Usage: $0 <program> <protocol> <n_parties>}"
 
 case "$PROTOCOL" in
-    mascot-party.x|semi-party.x|semi2k-party.x|shamir-party.x|malicious-shamir-party.x) ;;
+    mascot-party.x|semi-party.x|semi2k-party.x|shamir-party.x|malicious-shamir-party.x|\
+    replicated-ring-party.x|brain-party.x|malicious-rep-ring-party.x|ps-rep-ring-party.x|\
+    sy-rep-ring-party.x|rep4-ring-party.x|replicated-field-party.x|malicious-rep-field-party.x|\
+    ps-rep-field-party.x|spdz2k-party.x|mama-party.x|atlas-party.x|\
+    hemi-party.x|temi-party.x|soho-party.x|cowgear-party.x|chaigear-party.x|\
+    lowgear-party.x|highgear-party.x) ;;
     *) echo "ERROR: unknown protocol '${PROTOCOL}'." >&2
        echo "  Valid: mascot-party.x semi-party.x semi2k-party.x shamir-party.x malicious-shamir-party.x" >&2
+       echo "         replicated-ring-party.x brain-party.x malicious-rep-ring-party.x ps-rep-ring-party.x" >&2
+       echo "         sy-rep-ring-party.x rep4-ring-party.x replicated-field-party.x malicious-rep-field-party.x" >&2
+       echo "         ps-rep-field-party.x spdz2k-party.x mama-party.x atlas-party.x" >&2
+       echo "         hemi-party.x temi-party.x soho-party.x cowgear-party.x chaigear-party.x" >&2
+       echo "         lowgear-party.x highgear-party.x" >&2
        exit 1 ;;
 esac
 

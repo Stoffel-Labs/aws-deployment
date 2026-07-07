@@ -1,0 +1,377 @@
+#!/bin/sh
+set -e
+
+# Must match N_PARTIES / THRESHOLD in app.py: min_shares(t) = 2t+1 is the
+# smallest party count the deployed coordinator/nodes can run a session with.
+DEPLOYED_PARTIES=10
+THRESHOLD=1
+
+. "$(dirname "$0")/regions"
+
+# Unique per-run S3 key for the full-mesh ping address book (see the
+# AddressWaiter sidecar in app.py) — avoids ever picking up a stale address
+# book left over from a previous run.
+PING_ADDR_KEY="ping-addresses-$(date +%s)-$$.csv"
+
+usage() {
+    echo "Usage: $0 <program-filename> [--input-total <n>] [--backend avss|honeybadger] [--curve <curve>] [--num-parties <n>] [--threshold <t>]" >&2
+    echo "  e.g.: $0 client_mul.stflb --input-total 4 --backend avss --curve bls12-381 --num-parties 5 --threshold 1" >&2
+    echo "" >&2
+    echo "$DEPLOYED_PARTIES parties are always deployed, one per region (see regions);" >&2
+    echo "--num-parties selects how many of them (party0..party<n-1>) are actually started" >&2
+    echo "(default: 5). --threshold sets t (default: $THRESHOLD); --num-parties must be >= 2t+1." >&2
+    echo "" >&2
+    echo "The file must already be uploaded to S3 first:" >&2
+    echo "  ./upload-program program.stflb" >&2
+    exit 1
+}
+
+PROGRAM="${1:?$(usage)}"; shift
+
+N_INPUTS=""
+STOFFEL_MPC_BACKEND="honeybadger"
+STOFFEL_MPC_CURVE="bls12-381"
+NUM_PARTIES="5"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --input-total) N_INPUTS="$2"; shift 2 ;;
+        --curve)       STOFFEL_MPC_CURVE="$2"; shift 2 ;;
+        --num-parties) NUM_PARTIES="$2"; shift 2 ;;
+        --threshold)   THRESHOLD="$2"; shift 2 ;;
+        --backend)
+            case "$2" in
+                avss|honeybadger) STOFFEL_MPC_BACKEND="$2" ;;
+                *) echo "Invalid backend: $2 (expected avss or honeybadger)" >&2; usage ;;
+            esac
+            shift 2 ;;
+        *) echo "Unknown option: $1" >&2; usage ;;
+    esac
+done
+
+case "$THRESHOLD" in
+    ''|*[!0-9]*) echo "Invalid --threshold: $THRESHOLD (expected an integer)" >&2; usage ;;
+esac
+MIN_PARTIES=$((2 * THRESHOLD + 1))
+
+case "$NUM_PARTIES" in
+    ''|*[!0-9]*) echo "Invalid --num-parties: $NUM_PARTIES (expected an integer)" >&2; usage ;;
+esac
+if [ "$NUM_PARTIES" -lt "$MIN_PARTIES" ] || [ "$NUM_PARTIES" -gt "$DEPLOYED_PARTIES" ]; then
+    echo "Invalid --num-parties: $NUM_PARTIES (must be between $MIN_PARTIES and $DEPLOYED_PARTIES for threshold $THRESHOLD)" >&2
+    usage
+fi
+LAST_PARTY=$((NUM_PARTIES - 1))
+
+PROGRAM_BASENAME="$(basename "$PROGRAM")"
+PROGRAM_PATH="/app/programs/$PROGRAM_BASENAME"
+
+NODE_CERTS=""
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    NODE_CERTS="${NODE_CERTS:+$NODE_CERTS,}/app/ids/pub/nodes/node${IDX}.crt"
+    IDX=$((IDX + 1))
+done
+
+get_output() {
+    # get_output <stack> <region> <output-key>
+    aws cloudformation describe-stacks --stack-name "$1" --region "$2" \
+        --query "Stacks[0].Outputs[?OutputKey=='$3'].OutputValue" \
+        --output text
+}
+
+build_party_overrides() {
+    # build_party_overrides <bucket> <program-basename> <program-path> \
+    #   <n-inputs> <backend> <curve> <num-parties> <threshold> \
+    #   <coord-addr> <bootstrap-addr-or-empty> <ping-addr-key>
+    python3 -c "
+import json, sys
+bucket, base, path, n_inputs, backend, curve, num_parties, threshold, coord_addr, bootstrap_addr, ping_key = sys.argv[1:12]
+env = [
+    {'name': 'STOFFEL_PROGRAM', 'value': path},
+    {'name': 'STOFFEL_MPC_BACKEND', 'value': backend},
+    {'name': 'STOFFEL_MPC_CURVE', 'value': curve},
+    {'name': 'STOFFEL_N_PARTIES', 'value': num_parties},
+    {'name': 'STOFFEL_THRESHOLD', 'value': threshold},
+    {'name': 'STOFFEL_COORD_ADDR', 'value': coord_addr},
+]
+if n_inputs:
+    env.append({'name': 'STOFFEL_CLIENT_INPUT_TOTAL', 'value': n_inputs})
+if bootstrap_addr:
+    env.append({'name': 'STOFFEL_BOOTSTRAP_ADDR', 'value': bootstrap_addr})
+waiter_script = f'for i in \$(seq 1 60); do aws s3 cp s3://{bucket}/{ping_key} /shared/addresses.csv >/dev/null 2>&1 && exit 0; sleep 5; done; exit 1'
+overrides = {
+    'containerOverrides': [
+        {'name': 'Downloader', 'command': ['s3', 'cp', f's3://{bucket}/{base}', path]},
+        {'name': 'AddressWaiter', 'command': [waiter_script]},
+        {'name': 'Container', 'environment': env},
+    ]
+}
+print(json.dumps(overrides))
+" "$@"
+}
+
+run_task() {
+    # run_task <region> <cluster> <sg> <subnets> <taskdef> <overrides-json>
+    aws ecs run-task \
+        --region "$1" \
+        --cluster "$2" \
+        --launch-type FARGATE \
+        --task-definition "$5" \
+        --network-configuration "awsvpcConfiguration={subnets=[$4],securityGroups=[$3],assignPublicIp=ENABLED}" \
+        --overrides "$6" \
+        --output json
+}
+
+extract_task_arn() {
+    python3 -c "import json,sys; d=json.load(sys.stdin); print(d['tasks'][0]['taskArn'] if d.get('tasks') else '')" 2>/dev/null
+}
+
+print_failures() {
+    python3 -c "import json,sys; [print(' ',f) for f in json.load(sys.stdin).get('failures',[])]"
+}
+
+task_public_ip() {
+    # task_public_ip <region> <cluster> <task-arn>
+    ENI=$(aws ecs describe-tasks --region "$1" --cluster "$2" --tasks "$3" \
+        --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='networkInterfaceId'].value | [0]" \
+        --output text)
+    aws ec2 describe-network-interfaces --region "$1" --network-interface-ids "$ENI" \
+        --query 'NetworkInterfaces[0].Association.PublicIp' --output text
+}
+
+# --- Resolve coordinator stack outputs ---
+COORD_STACK="StoffelCoordinatorStack"
+COORD_CLUSTER=$(get_output "$COORD_STACK" "$COORD_REGION" ClusterName)
+COORD_SG=$(get_output "$COORD_STACK" "$COORD_REGION" SecurityGroupId)
+COORD_SUBNETS=$(get_output "$COORD_STACK" "$COORD_REGION" SubnetIds)
+COORD_TASKDEF=$(get_output "$COORD_STACK" "$COORD_REGION" CoordTaskDef)
+BUCKET=$(get_output "$COORD_STACK" "$COORD_REGION" ProgramsBucketName)
+
+if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
+    echo "ERROR: could not resolve StoffelCoordinatorStack outputs in $COORD_REGION — has it been deployed?" >&2
+    exit 1
+fi
+
+# --- Resolve each active party stack's outputs ---
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    REGION=$(party_region "$IDX")
+    STACK="StoffelParty${IDX}Stack"
+    eval "REGION_$IDX=\$REGION"
+    eval "CLUSTER_$IDX=\$(get_output \"\$STACK\" \"\$REGION\" ClusterName)"
+    eval "SG_$IDX=\$(get_output \"\$STACK\" \"\$REGION\" SecurityGroupId)"
+    eval "SUBNETS_$IDX=\$(get_output \"\$STACK\" \"\$REGION\" SubnetIds)"
+    eval "TASKDEF_$IDX=\$(get_output \"\$STACK\" \"\$REGION\" PartyTaskDef)"
+    eval "CLUSTER_CHECK=\$CLUSTER_$IDX"
+    if [ -z "$CLUSTER_CHECK" ] || [ "$CLUSTER_CHECK" = "None" ]; then
+        echo "ERROR: could not resolve $STACK outputs in $REGION — has it been deployed?" >&2
+        exit 1
+    fi
+    IDX=$((IDX + 1))
+done
+
+# Reset client/log env files
+printf '#!/bin/sh\n' > client-env.sh
+printf '#!/bin/sh\n' > log-env.sh
+echo "ACTIVE_PARTIES=\"$(seq 0 "$LAST_PARTY" | tr '\n' ' ')\"" >> log-env.sh
+
+echo "Starting Stoffel cross-region cluster..."
+[ -n "$N_INPUTS" ] && echo "  input total:   ${N_INPUTS}"
+echo "  backend:       ${STOFFEL_MPC_BACKEND}"
+echo "  curve:         ${STOFFEL_MPC_CURVE}"
+echo "  parties:       ${NUM_PARTIES} of ${DEPLOYED_PARTIES}"
+echo "  threshold:     ${THRESHOLD}"
+
+# --- Start coordinator ---
+COORD_OVERRIDES=$(aws ecs describe-task-definition --region "$COORD_REGION" \
+    --task-definition "$COORD_TASKDEF" \
+    --query 'taskDefinition.containerDefinitions[0].command' \
+    --output json | python3 -c "
+import json, sys
+cmd = json.load(sys.stdin)
+n_inputs, backend, curve, num_parties, node_certs, threshold, bucket, ping_key = sys.argv[1:9]
+if n_inputs:
+    if '--n-inputs' in cmd:
+        idx = cmd.index('--n-inputs')
+        cmd[idx + 1] = n_inputs
+    else:
+        cmd.extend(['--n-inputs', n_inputs])
+if backend and '--backend' in cmd:
+    idx = cmd.index('--backend')
+    cmd[idx + 1] = backend
+if '--n' in cmd:
+    idx = cmd.index('--n')
+    cmd[idx + 1] = num_parties
+if '--t' in cmd:
+    idx = cmd.index('--t')
+    cmd[idx + 1] = threshold
+if '--initial-mpc-nodes' in cmd:
+    idx = cmd.index('--initial-mpc-nodes')
+    cmd[idx + 1] = node_certs
+env = [{'name': 'STOFFEL_MPC_BACKEND', 'value': backend}, {'name': 'STOFFEL_MPC_CURVE', 'value': curve}, {'name': 'STOFFEL_THRESHOLD', 'value': threshold}]
+waiter_script = f'for i in \$(seq 1 60); do aws s3 cp s3://{bucket}/{ping_key} /shared/addresses.csv >/dev/null 2>&1 && exit 0; sleep 5; done; exit 1'
+overrides = {
+    'containerOverrides': [
+        {'name': 'Container', 'command': cmd, 'environment': env},
+        {'name': 'AddressWaiter', 'command': [waiter_script]},
+    ]
+}
+print(json.dumps(overrides))
+" "$N_INPUTS" "$STOFFEL_MPC_BACKEND" "$STOFFEL_MPC_CURVE" "$NUM_PARTIES" "$NODE_CERTS" "$THRESHOLD" "$BUCKET" "$PING_ADDR_KEY")
+
+echo "Starting coordinator in $COORD_REGION..."
+COORD_RUN_OUTPUT=$(run_task "$COORD_REGION" "$COORD_CLUSTER" "$COORD_SG" "$COORD_SUBNETS" "$COORD_TASKDEF" "$COORD_OVERRIDES")
+COORD_TASK_ARN=$(echo "$COORD_RUN_OUTPUT" | extract_task_arn)
+if [ -z "$COORD_TASK_ARN" ]; then
+    echo "ERROR: coordinator task failed to launch:" >&2
+    echo "$COORD_RUN_OUTPUT" | print_failures >&2
+    exit 1
+fi
+echo "  task: $COORD_TASK_ARN"
+
+echo "  Waiting for coordinator to reach RUNNING..."
+aws ecs wait tasks-running --region "$COORD_REGION" --cluster "$COORD_CLUSTER" --tasks "$COORD_TASK_ARN"
+
+COORD_PUBLIC_IP=$(task_public_ip "$COORD_REGION" "$COORD_CLUSTER" "$COORD_TASK_ARN")
+COORD_INSTANCE_ID=$(echo "$COORD_TASK_ARN" | sed 's|.*/||')
+COORD_LOG_GROUP=$(aws ecs describe-task-definition --region "$COORD_REGION" --task-definition "$COORD_TASKDEF" \
+    --query 'taskDefinition.containerDefinitions[0].logConfiguration.options."awslogs-group"' \
+    --output text)
+
+echo "  coordinator public IP: $COORD_PUBLIC_IP"
+COORD_ADDR="${COORD_PUBLIC_IP}:31415"
+{
+    echo "COORD_PUBLIC_IP=$COORD_PUBLIC_IP"
+} >> client-env.sh
+{
+    echo "COORD_REGION=$COORD_REGION"
+    echo "COORD_CLUSTER=$COORD_CLUSTER"
+    echo "COORD_LOG_GROUP=$COORD_LOG_GROUP"
+    echo "COORD_LOG_STREAM=coordinator/Container/$COORD_INSTANCE_ID"
+    echo "COORD_TASK_ARN=$COORD_TASK_ARN"
+} >> log-env.sh
+
+# --- Start party0 first; parties 1..LAST_PARTY bootstrap off its public IP ---
+echo "Starting party0 in $(party_region 0)..."
+OVERRIDES0=$(build_party_overrides "$BUCKET" "$PROGRAM_BASENAME" "$PROGRAM_PATH" "$N_INPUTS" "$STOFFEL_MPC_BACKEND" "$STOFFEL_MPC_CURVE" "$NUM_PARTIES" "$THRESHOLD" "$COORD_ADDR" "" "$PING_ADDR_KEY")
+PARTY0_RUN_OUTPUT=$(run_task "$REGION_0" "$CLUSTER_0" "$SG_0" "$SUBNETS_0" "$TASKDEF_0" "$OVERRIDES0")
+PARTY0_ARN=$(echo "$PARTY0_RUN_OUTPUT" | extract_task_arn)
+if [ -z "$PARTY0_ARN" ]; then
+    echo "ERROR: party0 task failed to launch:" >&2
+    echo "$PARTY0_RUN_OUTPUT" | print_failures >&2
+    exit 1
+fi
+echo "  task: $PARTY0_ARN"
+
+echo "  Waiting for party0 to reach RUNNING..."
+aws ecs wait tasks-running --region "$REGION_0" --cluster "$CLUSTER_0" --tasks "$PARTY0_ARN"
+
+PARTY0_PUBLIC_IP=$(task_public_ip "$REGION_0" "$CLUSTER_0" "$PARTY0_ARN")
+PARTY0_INSTANCE_ID=$(echo "$PARTY0_ARN" | sed 's|.*/||')
+PARTY0_LOG_GROUP=$(aws ecs describe-task-definition --region "$REGION_0" --task-definition "$TASKDEF_0" \
+    --query 'taskDefinition.containerDefinitions[?name==`Container`].logConfiguration.options."awslogs-group" | [0]' \
+    --output text)
+
+echo "  party0 public IP: $PARTY0_PUBLIC_IP"
+BOOTSTRAP_ADDR="${PARTY0_PUBLIC_IP}:9000"
+{
+    echo "PARTY0_PUBLIC_IP=$PARTY0_PUBLIC_IP"
+} >> client-env.sh
+{
+    echo "PARTY0_REGION=$REGION_0"
+    echo "PARTY0_CLUSTER=$CLUSTER_0"
+    echo "PARTY0_LOG_GROUP=$PARTY0_LOG_GROUP"
+    echo "PARTY0_LOG_STREAM=party0/Container/$PARTY0_INSTANCE_ID"
+    echo "PARTY0_TASK_ARN=$PARTY0_ARN"
+} >> log-env.sh
+
+# --- Start parties 1..LAST_PARTY across their regions ---
+# The 120s bootnode session timeout runs from when party0 first registers,
+# so all remaining parties need to launch before that window closes. We
+# fire every run-task call first (each is a single fast API call), then
+# wait on all of them — that overlaps each region's task provisioning
+# instead of serializing it behind our own wait loop.
+if [ "$LAST_PARTY" -ge 1 ]; then
+    echo "Starting parties 1-${LAST_PARTY} (one per region)..."
+    IDX=1
+    while [ "$IDX" -le "$LAST_PARTY" ]; do
+        eval "REGION=\$REGION_$IDX"
+        eval "CLUSTER=\$CLUSTER_$IDX"
+        eval "SG=\$SG_$IDX"
+        eval "SUBNETS=\$SUBNETS_$IDX"
+        eval "TASKDEF=\$TASKDEF_$IDX"
+        OVERRIDES=$(build_party_overrides "$BUCKET" "$PROGRAM_BASENAME" "$PROGRAM_PATH" "$N_INPUTS" "$STOFFEL_MPC_BACKEND" "$STOFFEL_MPC_CURVE" "$NUM_PARTIES" "$THRESHOLD" "$COORD_ADDR" "$BOOTSTRAP_ADDR" "$PING_ADDR_KEY")
+        RUN_OUTPUT=$(run_task "$REGION" "$CLUSTER" "$SG" "$SUBNETS" "$TASKDEF" "$OVERRIDES")
+        TASK_ARN=$(echo "$RUN_OUTPUT" | extract_task_arn)
+        if [ -z "$TASK_ARN" ]; then
+            echo "ERROR: party${IDX} task failed to launch in $REGION:" >&2
+            echo "$RUN_OUTPUT" | print_failures >&2
+            exit 1
+        fi
+        echo "  party${IDX} ($REGION) task: $TASK_ARN"
+        eval "TASK_ARN_$IDX=\$TASK_ARN"
+        IDX=$((IDX + 1))
+    done
+
+    echo "  Waiting for parties 1-${LAST_PARTY} to reach RUNNING..."
+    IDX=1
+    while [ "$IDX" -le "$LAST_PARTY" ]; do
+        eval "REGION=\$REGION_$IDX"
+        eval "CLUSTER=\$CLUSTER_$IDX"
+        eval "TASK_ARN=\$TASK_ARN_$IDX"
+        aws ecs wait tasks-running --region "$REGION" --cluster "$CLUSTER" --tasks "$TASK_ARN"
+        IDX=$((IDX + 1))
+    done
+
+    IDX=1
+    while [ "$IDX" -le "$LAST_PARTY" ]; do
+        eval "REGION=\$REGION_$IDX"
+        eval "CLUSTER=\$CLUSTER_$IDX"
+        eval "TASK_ARN=\$TASK_ARN_$IDX"
+        eval "TASKDEF=\$TASKDEF_$IDX"
+
+        PUBLIC_IP=$(task_public_ip "$REGION" "$CLUSTER" "$TASK_ARN")
+        eval "PUBLIC_IP_$IDX=\$PUBLIC_IP"
+        INSTANCE_ID=$(echo "$TASK_ARN" | sed 's|.*/||')
+        LOG_GROUP=$(aws ecs describe-task-definition --region "$REGION" --task-definition "$TASKDEF" \
+            --query 'taskDefinition.containerDefinitions[?name==`Container`].logConfiguration.options."awslogs-group" | [0]' \
+            --output text)
+
+        echo "  party${IDX} ($REGION) public IP: $PUBLIC_IP"
+        {
+            echo "PARTY${IDX}_PUBLIC_IP=$PUBLIC_IP"
+        } >> client-env.sh
+        {
+            echo "PARTY${IDX}_REGION=$REGION"
+            echo "PARTY${IDX}_CLUSTER=$CLUSTER"
+            echo "PARTY${IDX}_LOG_GROUP=$LOG_GROUP"
+            echo "PARTY${IDX}_LOG_STREAM=party${IDX}/Container/$INSTANCE_ID"
+            echo "PARTY${IDX}_TASK_ARN=$TASK_ARN"
+        } >> log-env.sh
+        IDX=$((IDX + 1))
+    done
+fi
+
+# --- Publish the full-mesh ping address book ---
+# Every entity's public IP is only known once every party has launched, so
+# it can't be baked into any entity's own startup overrides. Each entity's
+# AddressWaiter sidecar (see app.py) is already polling S3 for this exact
+# key; once it lands, every main container picks it up, pings everyone else,
+# and logs the RTTs — see ../ping-matrix.
+echo "Publishing full-mesh ping address book..."
+PUBLIC_IP_0="$PARTY0_PUBLIC_IP"
+{
+    echo "coord=$COORD_PUBLIC_IP"
+    IDX=0
+    while [ "$IDX" -le "$LAST_PARTY" ]; do
+        eval "IP=\$PUBLIC_IP_$IDX"
+        echo "node${IDX}=$IP"
+        IDX=$((IDX + 1))
+    done
+} | aws s3 cp - "s3://$BUCKET/$PING_ADDR_KEY"
+
+echo "All nodes started."
+echo ""
+echo "Client environment written to client-env.sh — run './run-client <client_id> <inputs>' to start a client."
+echo "Log streams written to log-env.sh."
+echo "Ping address book published — run './ping-matrix' once the run has finished to build the RTT matrix."
