@@ -1,0 +1,147 @@
+#!/bin/sh
+# Run N_ITER benchmark iterations of a Stoffel program and write results to CSV.
+# Metrics are collected from Docker container logs after each run.
+#
+# Usage: ./run-exp <program.stflb> [n_iterations] [--loss <pct>] [--bandwidth <mbit>] [--input-total <n>]
+#   e.g. ./run-exp client_mul.stflb 5 --loss 2 --bandwidth 100 --input-total 4
+
+set -e
+
+usage() {
+    echo "Usage: $0 <program.stflb> [n_iterations] [--loss <pct>] [--bandwidth <mbit>] [--input-total <n>]" >&2
+    exit 1
+}
+
+PROGRAM="${1:?$(usage)}"; shift
+N_ITER=1
+NET_LOSS=""
+NET_BANDWIDTH=""
+INPUT_TOTAL=""
+
+# N_ITER is optional positional arg before any flags
+if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+    N_ITER="$1"; shift
+fi
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --loss)        NET_LOSS="$2";      shift 2 ;;
+        --bandwidth)   NET_BANDWIDTH="$2"; shift 2 ;;
+        --input-total) INPUT_TOTAL="$2";   shift 2 ;;
+        *) echo "Unknown option: $1" >&2; usage ;;
+    esac
+done
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+COMPOSE="docker compose -f $DIR/docker-compose.yml"
+CSV="$DIR/results.csv"
+N_PARTIES=5
+
+# Write CSV header
+{
+    printf 'iter'
+    for j in $(seq 0 $((N_PARTIES - 1))); do
+        printf ',node%d_total_s,node%d_mem_mb,node%d_pp_s,node%d_exec_s' \
+            "$j" "$j" "$j" "$j"
+    done
+    printf ',client_0_s,client_1_s'
+    printf ',round_preprocessing_s,round_input_mask_reservation_s'
+    printf ',round_input_collection_s,round_mpc_execution_s,round_output_distribution_s'
+    printf '\n'
+} > "$CSV"
+
+for i in $(seq 1 "$N_ITER"); do
+    echo "=== Iteration $i ==="
+
+    NODES_ARGS="$PROGRAM"
+    [ -n "$NET_LOSS" ]      && NODES_ARGS="$NODES_ARGS --loss $NET_LOSS"
+    [ -n "$NET_BANDWIDTH" ] && NODES_ARGS="$NODES_ARGS --bandwidth $NET_BANDWIDTH"
+    [ -n "$INPUT_TOTAL" ]   && NODES_ARGS="$NODES_ARGS --input-total $INPUT_TOTAL"
+    # shellcheck disable=SC2086
+    "$DIR/run-nodes" $NODES_ARGS
+
+    CLIENT_START=$(python3 -c "import time; print(int(time.time() * 1000))")
+
+    "$DIR/run-client" 0 "0 0" 0 &
+    PID0=$!
+    "$DIR/run-client" 1 "1 1" 1 &
+    PID1=$!
+    wait $PID0
+    CLIENT0_END=$(python3 -c "import time; print(int(time.time() * 1000))")
+    wait $PID1
+    CLIENT1_END=$(python3 -c "import time; print(int(time.time() * 1000))")
+
+    echo "Waiting for party containers to stop..."
+    $COMPOSE wait party0 party1 party2 party3 party4
+
+    row="$i"
+
+    for j in $(seq 0 $((N_PARTIES - 1))); do
+        SERVICE="party${j}"
+        LOGS=$($COMPOSE logs --timestamps --no-log-prefix "$SERVICE" 2>/dev/null)
+
+        DURATION=$(printf '%s\n' "$LOGS" | python3 -c "
+import sys, re
+from datetime import datetime, timezone
+
+lines = [l for l in sys.stdin.read().splitlines() if l.strip()]
+if len(lines) < 2:
+    print('N/A'); exit()
+
+def parse(ts):
+    ts = ts[:26]
+    return datetime.fromisoformat(ts.replace('Z', '+00:00')).timestamp()
+
+try:
+    t0 = parse(lines[0].split()[0])
+    t1 = parse(lines[-1].split()[0])
+    print(f'{t1 - t0:.3f}')
+except Exception:
+    print('N/A')
+")
+
+        MEM=$(printf '%s\n' "$LOGS" | python3 -c "
+import sys, re
+m = re.search(r'PEAK_MEM_BYTES: (\d+)', sys.stdin.read())
+print(f'{int(m.group(1)) / 1024 / 1024:.1f}' if m else 'N/A')
+")
+
+        PP=$(printf '%s\n' "$LOGS" | python3 -c "
+import sys, re
+m = re.search(r'BENCH_PP_SECS: (\S+)', sys.stdin.read())
+print(m.group(1) if m else 'N/A')
+")
+
+        EXEC=$(printf '%s\n' "$LOGS" | python3 -c "
+import sys, re
+m = re.search(r'BENCH_EXEC_SECS: (\S+)', sys.stdin.read())
+print(m.group(1) if m else 'N/A')
+")
+
+        row="$row,$DURATION,$MEM,$PP,$EXEC"
+    done
+
+    CLIENT0_S=$(python3 -c "print(f'{($CLIENT0_END - $CLIENT_START) / 1000.0:.3f}')")
+    CLIENT1_S=$(python3 -c "print(f'{($CLIENT1_END - $CLIENT_START) / 1000.0:.3f}')")
+    row="$row,$CLIENT0_S,$CLIENT1_S"
+
+    COORD_LOGS=$($COMPOSE logs --no-log-prefix coordinator 2>/dev/null)
+    ROUND_TIMES=$(printf '%s\n' "$COORD_LOGS" | python3 -c "
+import sys, re
+rounds = ['Preprocessing', 'InputMaskReservation', 'InputCollection', 'MPCExecution', 'OutputDistribution', 'ProgramFinished']
+messages = sys.stdin.read()
+ts = {}
+for m in re.finditer(r'BENCH_ROUND: (\w+) ts=(\d+)', messages):
+    ts[m.group(1)] = int(m.group(2))
+results = []
+for idx in range(len(rounds) - 1):
+    t0, t1 = ts.get(rounds[idx]), ts.get(rounds[idx + 1])
+    results.append(f'{(t1 - t0) / 1000.0:.3f}' if t0 is not None and t1 is not None else 'N/A')
+print(','.join(results))
+")
+    row="$row,$ROUND_TIMES"
+
+    echo "$row" >> "$CSV"
+    echo "  -> $row"
+done
+
+echo "Results written to $CSV"
