@@ -4,9 +4,16 @@ Runs a StoffelVM MPC cluster on EC2 instances with a self-service API
 layer so external users can submit and run programs without AWS
 credentials of their own and without racing each other for the shared cluster.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design and rationale.
+## Setup
 
-## User workflow (API-driven, no AWS account needed)
+1. Load the submodules: `git submodule update --init --recursive`.
+2. Build the `stoffel-run` binary: `cd StoffelVM && cargo build --release`.
+3. Build the MPC programs used by the deployments below: `./build-programs`
+   (compiles everything under `src/` into `.stflb` bytecode in `programs/`).
+
+New programs can be added by creating `*.stfl` and `Stoffel.toml` files under a new directory in `src/`.
+
+## Running MPC Programs
 
 Needs only the API key given to you by the operator - no AWS CLI, no
 credentials. `API_URL` defaults to this deployment's endpoint, so you only
@@ -39,12 +46,21 @@ scripts cover what happens after `run-program` exits at `RUNNING`:
 recorded at the same time as `endpoints`), though the output is
 partial/incomplete until the job actually finishes.
 
-## Scripts
+## Full Example
 
-| Script | Description |
-|---|---|
-| `run-program <file.stflb> [opts]` | Presign upload, upload to S3, submit the job, print a message every 5s while QUEUED, exit once it's RUNNING (or a terminal state). User-facing - needs only `API_KEY` env var, no AWS credentials. `API_URL` defaults to this deployment's endpoint |
-| `get-program-status <job_id>` | One-shot status check for a job. Same env vars as `run-program` |
-| `wait-for-program <job_id>` | Poll a job every 5s, printing each status, until SUCCEEDED or FAILED. Same env vars as `run-program` |
-| `get-logs <job_id> [output-file]` | Fetch a job's logs and pretty-print them (grouped by node, one line per message) instead of the raw JSON response. Same env vars as `run-program` |
-| `get-results <job_id> [output-csv]` | Wait for a job to reach a terminal state, then aggregate its ping RTTs and BENCH_PP_SECS/BENCH_EXEC_SECS benchmark lines into an RTT matrix + timing stats CSV (default `results.csv`) - the job-API equivalent of `../stoffel-ec2-cross-region-deployment/get-results`. Same env vars as `run-program` |
+This example runs the AES program that is in the `src` directory.
+We assume you have cloned the repository and are in the root directory.
+
+```
+git submodule update --init --recursive
+cd StoffelVM
+cargo build --release
+cd ..
+./build-programs
+cd stoffel-ec2-user-deployment
+export API_KEY=<api-key-value>
+./run-program ../programs/aes.stflb --num-parties 5 --threshold 1 --input-total 0   # prints job ID
+./wait-for-program <job_id>
+./get-logs <job_id>
+./get-results <job_id>
+```
