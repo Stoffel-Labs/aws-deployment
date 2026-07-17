@@ -3,11 +3,14 @@
 # (grouped by node, one message per line) instead of the raw JSON blob
 # GET /jobs/{job_id}/logs returns.
 #
-# Usage: API_URL=... API_KEY=... ./get-logs <job_id> [output-file]
+# API_URL defaults to this deployment's endpoint; only set it to override.
+# Usage: API_KEY=... ./get-logs <job_id> [output-file]
 set -e
 
+DEFAULT_API_URL="https://0wcij9fhh5.execute-api.eu-north-1.amazonaws.com/prod"
+
 usage() {
-    echo "Usage: API_URL=... API_KEY=... $0 <job_id> [output-file]" >&2
+    echo "Usage: API_KEY=... $0 <job_id> [output-file]" >&2
     exit 1
 }
 
@@ -15,14 +18,11 @@ usage() {
 JOB_ID="$1"
 OUTPUT_FILE="${2:-}"
 
-if [ -z "$API_URL" ]; then
-    echo "ERROR: API_URL is not set." >&2
-    exit 1
-fi
 if [ -z "$API_KEY" ]; then
     echo "ERROR: API_KEY is not set." >&2
     exit 1
 fi
+API_URL="${API_URL:-$DEFAULT_API_URL}"
 API_URL="${API_URL%/}"
 
 RESPONSE=$(curl -sf "$API_URL/jobs/$JOB_ID/logs" -H "x-api-key: $API_KEY") || {

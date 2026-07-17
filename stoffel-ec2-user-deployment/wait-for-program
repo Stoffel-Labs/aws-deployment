@@ -1,25 +1,25 @@
 #!/bin/sh
 # Poll a job's status every 5s, printing a message each time, until it
 # reaches a terminal state (SUCCEEDED or FAILED).
-# Usage: API_URL=... API_KEY=... ./wait-for-program <job_id>
+# API_URL defaults to this deployment's endpoint; only set it to override.
+# Usage: API_KEY=... ./wait-for-program <job_id>
 set -e
 
+DEFAULT_API_URL="https://0wcij9fhh5.execute-api.eu-north-1.amazonaws.com/prod"
+
 usage() {
-    echo "Usage: API_URL=... API_KEY=... $0 <job_id>" >&2
+    echo "Usage: API_KEY=... $0 <job_id>" >&2
     exit 1
 }
 
 [ $# -lt 1 ] && usage
 JOB_ID="$1"
 
-if [ -z "$API_URL" ]; then
-    echo "ERROR: API_URL is not set." >&2
-    exit 1
-fi
 if [ -z "$API_KEY" ]; then
     echo "ERROR: API_KEY is not set." >&2
     exit 1
 fi
+API_URL="${API_URL:-$DEFAULT_API_URL}"
 API_URL="${API_URL%/}"
 
 while :; do

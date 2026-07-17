@@ -7,11 +7,14 @@
 # which pulls the same lines straight from CloudWatch given a log-env-file;
 # here there's no log-env-file, just the job_id.
 #
-# Usage: API_URL=... API_KEY=... ./get-results <job_id> [output-csv]
+# API_URL defaults to this deployment's endpoint; only set it to override.
+# Usage: API_KEY=... ./get-results <job_id> [output-csv]
 set -e
 
+DEFAULT_API_URL="https://0wcij9fhh5.execute-api.eu-north-1.amazonaws.com/prod"
+
 usage() {
-    echo "Usage: API_URL=... API_KEY=... $0 <job_id> [output-csv]" >&2
+    echo "Usage: API_KEY=... $0 <job_id> [output-csv]" >&2
     exit 1
 }
 
@@ -19,14 +22,11 @@ usage() {
 JOB_ID="$1"
 OUT_CSV="${2:-results.csv}"
 
-if [ -z "$API_URL" ]; then
-    echo "ERROR: API_URL is not set." >&2
-    exit 1
-fi
 if [ -z "$API_KEY" ]; then
     echo "ERROR: API_KEY is not set." >&2
     exit 1
 fi
+API_URL="${API_URL:-$DEFAULT_API_URL}"
 API_URL="${API_URL%/}"
 
 # Wait for the job to reach a terminal state first: ping/BENCH_* lines are

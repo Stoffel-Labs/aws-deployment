@@ -4,14 +4,17 @@
 # QUEUED (RUNNING, or a terminal state reached before ever running). Use
 # get-program-status / wait-for-program / get-logs for what happens after.
 #
-# Needs only API_URL and API_KEY (env vars) - no AWS credentials or CLI
-# required. Get these from whoever operates the deployment; the operator
-# gets the key value themselves via ./get-api-key (which does need AWS
-# credentials) and hands it to you out of band.
+# Needs only API_KEY (env var) - no AWS credentials or CLI required. Get it
+# from whoever operates the deployment; the operator gets the key value
+# themselves via ./get-api-key (which does need AWS credentials) and hands
+# it to you out of band. API_URL defaults to this deployment's endpoint and
+# only needs to be set to point at a different one.
 #
-# Usage: API_URL=... API_KEY=... ./run-program <program-filename> [--num-parties <n>] [--threshold <t>]
+# Usage: API_KEY=... ./run-program <program-filename> [--num-parties <n>] [--threshold <t>]
 #                      [--backend avss|honeybadger] [--curve <curve>] [--input-total <n>]
 set -e
+
+DEFAULT_API_URL="https://0wcij9fhh5.execute-api.eu-north-1.amazonaws.com/prod"
 
 usage() {
     echo "Usage: $0 <program-filename> [--num-parties <n>] [--threshold <t>] [--backend avss|honeybadger] [--curve <curve>] [--input-total <n>]" >&2
@@ -40,14 +43,11 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ -z "$API_URL" ]; then
-    echo "ERROR: API_URL is not set. Usage: API_URL=... API_KEY=... $0 <program-filename> [opts]" >&2
-    exit 1
-fi
 if [ -z "$API_KEY" ]; then
-    echo "ERROR: API_KEY is not set. Usage: API_URL=... API_KEY=... $0 <program-filename> [opts]" >&2
+    echo "ERROR: API_KEY is not set. Usage: API_KEY=... $0 <program-filename> [opts]" >&2
     exit 1
 fi
+API_URL="${API_URL:-$DEFAULT_API_URL}"
 API_URL="${API_URL%/}"
 
 # Wraps a curl call to the API: on any failure (network/TLS error or non-2xx

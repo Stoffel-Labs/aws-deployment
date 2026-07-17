@@ -8,11 +8,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design and rationale.
 
 ## User workflow (API-driven, no AWS account needed)
 
-Needs only the two values given to you by the operator - no AWS CLI, no
-credentials:
+Needs only the API key given to you by the operator - no AWS CLI, no
+credentials. `API_URL` defaults to this deployment's endpoint, so you only
+need to set it if pointing at a different deployment:
 
 ```sh
-API_URL=<ApiUrl> API_KEY=<api-key-value> ./run-program aes.stflb --num-parties 5 --threshold 1 --input-total 0
+API_KEY=<api-key-value> ./run-program aes.stflb --num-parties 5 --threshold 1 --input-total 0
 ```
 
 This presigns an upload, PUTs the file to S3, submits the job, and prints a
@@ -42,7 +43,7 @@ partial/incomplete until the job actually finishes.
 
 | Script | Description |
 |---|---|
-| `run-program <file.stflb> [opts]` | Presign upload, upload to S3, submit the job, print a message every 5s while QUEUED, exit once it's RUNNING (or a terminal state). User-facing - needs only `API_URL`/`API_KEY` env vars, no AWS credentials |
+| `run-program <file.stflb> [opts]` | Presign upload, upload to S3, submit the job, print a message every 5s while QUEUED, exit once it's RUNNING (or a terminal state). User-facing - needs only `API_KEY` env var, no AWS credentials. `API_URL` defaults to this deployment's endpoint |
 | `get-program-status <job_id>` | One-shot status check for a job. Same env vars as `run-program` |
 | `wait-for-program <job_id>` | Poll a job every 5s, printing each status, until SUCCEEDED or FAILED. Same env vars as `run-program` |
 | `get-logs <job_id> [output-file]` | Fetch a job's logs and pretty-print them (grouped by node, one line per message) instead of the raw JSON response. Same env vars as `run-program` |
