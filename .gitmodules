@@ -1,11 +1,11 @@
 [submodule "StoffelVM"]
 	path = StoffelVM
 	url = git@github.com:Stoffel-Labs/StoffelVM.git
-	branch = aws-fixes
+	branch = aws-fixes-scheduler-and-avss
 [submodule "stoffel-mpc-coordinator"]
 	path = stoffel-mpc-coordinator
 	url = git@github.com:Stoffel-Labs/stoffel-mpc-coordinator.git
-	branch = aws-deployment
+	branch = dev
 [submodule "mp-spdz"]
 	path = mp-spdz
 	url = https://github.com/data61/MP-SPDZ.git
