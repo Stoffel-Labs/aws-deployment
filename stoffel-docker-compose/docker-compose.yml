@@ -8,7 +8,7 @@ x-party: &party
     context: ../StoffelVM
     dockerfile: Dockerfile.benchmark-flexible
   volumes:
-    - ./programs:/app/programs:ro
+    - ../programs:/app/programs:ro
     - ../ids:/app/ids:ro
   cap_add: [NET_ADMIN]
   # Wrapper: apply tc netem rules if NET_LOSS / NET_BANDWIDTH are set,

@@ -1,0 +1,28 @@
+#!/bin/sh
+# Print the current status of a job (one-shot, no polling).
+# Usage: API_URL=... API_KEY=... ./get-program-status <job_id>
+set -e
+
+usage() {
+    echo "Usage: API_URL=... API_KEY=... $0 <job_id>" >&2
+    exit 1
+}
+
+[ $# -lt 1 ] && usage
+JOB_ID="$1"
+
+if [ -z "$API_URL" ]; then
+    echo "ERROR: API_URL is not set." >&2
+    exit 1
+fi
+if [ -z "$API_KEY" ]; then
+    echo "ERROR: API_KEY is not set." >&2
+    exit 1
+fi
+API_URL="${API_URL%/}"
+
+RESPONSE=$(curl -sf "$API_URL/jobs/$JOB_ID" -H "x-api-key: $API_KEY") || {
+    echo "ERROR: curl failed (exit $?) fetching status for $JOB_ID" >&2
+    exit 1
+}
+echo "$RESPONSE" | python3 -m json.tool

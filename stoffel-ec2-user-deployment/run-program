@@ -1,0 +1,162 @@
+#!/bin/sh
+# Run a program through the user-facing API: presign upload -> upload to S3 ->
+# submit job -> poll status while QUEUED, then exit once it's no longer
+# QUEUED (RUNNING, or a terminal state reached before ever running). Use
+# get-program-status / wait-for-program / get-logs for what happens after.
+#
+# Needs only API_URL and API_KEY (env vars) - no AWS credentials or CLI
+# required. Get these from whoever operates the deployment; the operator
+# gets the key value themselves via ./get-api-key (which does need AWS
+# credentials) and hands it to you out of band.
+#
+# Usage: API_URL=... API_KEY=... ./run-program <program-filename> [--num-parties <n>] [--threshold <t>]
+#                      [--backend avss|honeybadger] [--curve <curve>] [--input-total <n>]
+set -e
+
+usage() {
+    echo "Usage: $0 <program-filename> [--num-parties <n>] [--threshold <t>] [--backend avss|honeybadger] [--curve <curve>] [--input-total <n>]" >&2
+    echo "  e.g.: $0 client_mul.stflb --num-parties 5 --threshold 1" >&2
+    exit 1
+}
+
+[ $# -lt 1 ] && usage
+PROGRAM="$1"; shift
+[ -f "$PROGRAM" ] || { echo "ERROR: file not found: $PROGRAM" >&2; exit 1; }
+
+NUM_PARTIES="5"
+THRESHOLD="1"
+BACKEND="honeybadger"
+CURVE="bls12-381"
+N_INPUTS=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --num-parties) NUM_PARTIES="$2"; shift 2 ;;
+        --threshold)   THRESHOLD="$2"; shift 2 ;;
+        --backend)     BACKEND="$2"; shift 2 ;;
+        --curve)       CURVE="$2"; shift 2 ;;
+        --input-total) N_INPUTS="$2"; shift 2 ;;
+        *) echo "Unknown option: $1" >&2; usage ;;
+    esac
+done
+
+if [ -z "$API_URL" ]; then
+    echo "ERROR: API_URL is not set. Usage: API_URL=... API_KEY=... $0 <program-filename> [opts]" >&2
+    exit 1
+fi
+if [ -z "$API_KEY" ]; then
+    echo "ERROR: API_KEY is not set. Usage: API_URL=... API_KEY=... $0 <program-filename> [opts]" >&2
+    exit 1
+fi
+API_URL="${API_URL%/}"
+
+# Wraps a curl call to the API: on any failure (network/TLS error or non-2xx
+# HTTP response), print the real cause (curl's exit code, or the HTTP status
+# and response body) instead of just letting `set -e` kill the script with a
+# bare, undiagnosable exit code.
+api_call() {
+    METHOD="$1"; URL_PATH="$2"; DATA="$3"
+    if [ -n "$DATA" ]; then
+        RESPONSE=$(curl -s -w '\n%{http_code}' -X "$METHOD" "$API_URL$URL_PATH" \
+            -H "x-api-key: $API_KEY" -H "Content-Type: application/json" -d "$DATA") && CURL_EXIT=0 || CURL_EXIT=$?
+    else
+        RESPONSE=$(curl -s -w '\n%{http_code}' -X "$METHOD" "$API_URL$URL_PATH" \
+            -H "x-api-key: $API_KEY") && CURL_EXIT=0 || CURL_EXIT=$?
+    fi
+    if [ "$CURL_EXIT" -ne 0 ]; then
+        echo "ERROR: curl failed (exit $CURL_EXIT, see 'man curl' for the code) calling $METHOD $URL_PATH" >&2
+        echo "  Try running with -v manually against \$API_URL to see the raw connection/TLS error." >&2
+        exit 1
+    fi
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+    case "$HTTP_CODE" in
+        2??) ;;
+        *)
+            echo "ERROR: $METHOD $URL_PATH returned HTTP $HTTP_CODE:" >&2
+            echo "$BODY" >&2
+            exit 1
+            ;;
+    esac
+    echo "$BODY"
+}
+
+echo "Requesting presigned upload URL..."
+PRESIGN_RESPONSE=$(api_call POST /programs/presign)
+UPLOAD_URL=$(echo "$PRESIGN_RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin)['upload_url'])")
+PROGRAM_KEY=$(echo "$PRESIGN_RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin)['program_key'])")
+
+echo "Uploading $(basename "$PROGRAM") to S3 ($PROGRAM_KEY)..."
+# Must match the ContentType the presign Lambda signed the URL with
+# (application/octet-stream) - curl defaults to
+# application/x-www-form-urlencoded for --data-binary otherwise, which
+# doesn't match the signed Content-Type header and S3 rejects it with
+# SignatureDoesNotMatch.
+UPLOAD_HTTP_CODE=$(curl -s -o /tmp/run-program-s3-error.$$ -w '%{http_code}' -X PUT "$UPLOAD_URL" \
+    -H "Content-Type: application/octet-stream" --data-binary @"$PROGRAM") || {
+    echo "ERROR: curl failed (exit $?) uploading to S3" >&2
+    exit 1
+}
+case "$UPLOAD_HTTP_CODE" in
+    2??) rm -f /tmp/run-program-s3-error.$$ ;;
+    *)
+        echo "ERROR: S3 upload returned HTTP $UPLOAD_HTTP_CODE:" >&2
+        cat /tmp/run-program-s3-error.$$ >&2
+        rm -f /tmp/run-program-s3-error.$$
+        exit 1
+        ;;
+esac
+
+echo "Submitting job..."
+echo "  num_parties: $NUM_PARTIES"
+echo "  threshold:   $THRESHOLD"
+echo "  backend:     $BACKEND"
+echo "  curve:       $CURVE"
+[ -n "$N_INPUTS" ] && echo "  input total: $N_INPUTS"
+
+JOB_PAYLOAD=$(python3 -c "
+import json, sys
+program_key, num_parties, threshold, backend, curve, n_inputs = sys.argv[1:7]
+payload = {
+    'program_key': program_key,
+    'num_parties': int(num_parties),
+    'threshold': int(threshold),
+    'backend': backend,
+    'curve': curve,
+}
+if n_inputs:
+    payload['n_inputs'] = int(n_inputs)
+print(json.dumps(payload))
+" "$PROGRAM_KEY" "$NUM_PARTIES" "$THRESHOLD" "$BACKEND" "$CURVE" "$N_INPUTS")
+
+SUBMIT_RESPONSE=$(api_call POST /jobs "$JOB_PAYLOAD")
+JOB_ID=$(echo "$SUBMIT_RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin)['job_id'])")
+echo "Job submitted: $JOB_ID"
+
+echo "Waiting for the job to start running..."
+while :; do
+    STATUS_RESPONSE=$(api_call GET "/jobs/$JOB_ID")
+    STATUS=$(echo "$STATUS_RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status', ''))")
+    case "$STATUS" in
+        QUEUED)
+            echo "Job $JOB_ID is still QUEUED..."
+            sleep 5
+            ;;
+        *) break ;;
+    esac
+done
+
+echo ""
+echo "$STATUS_RESPONSE" | python3 -m json.tool
+echo ""
+
+if [ "$STATUS" = "FAILED" ]; then
+    echo "Job $JOB_ID failed." >&2
+    exit 1
+fi
+
+echo "Job $JOB_ID is $STATUS."
+echo "Run your own client against the endpoints above."
+echo "Check status with:        ./get-program-status $JOB_ID"
+echo "Wait until it finishes:   ./wait-for-program $JOB_ID"
+echo "Fetch logs once finished: ./get-logs $JOB_ID"

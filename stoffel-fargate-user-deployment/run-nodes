@@ -1,0 +1,318 @@
+#!/bin/sh
+set -e
+
+# Must match N_PARTIES / THRESHOLD in app.py: min_shares(t) = 2t+1 is the
+# smallest party count the deployed coordinator/nodes can run a session with.
+DEPLOYED_PARTIES=10
+THRESHOLD=1
+
+usage() {
+    echo "Usage: $0 <program-filename> [--input-total <n>] [--backend avss|honeybadger] [--curve <curve>] [--num-parties <n>] [--threshold <t>]" >&2
+    echo "  e.g.: $0 client_mul.stflb --input-total 4 --backend avss --curve bls12-381 --num-parties 5 --threshold 1" >&2
+    echo "" >&2
+    echo "$DEPLOYED_PARTIES parties are always deployed; --num-parties selects how many" >&2
+    echo "of them (party0..party<n-1>) are actually started (default: 5)." >&2
+    echo "--threshold sets t (default: $THRESHOLD); --num-parties must be at least 2t+1." >&2
+    echo "" >&2
+    echo "The file must already be on EFS - submit it via the API first:" >&2
+    echo "  POST /programs/presign, then PUT the file, then POST /jobs" >&2
+    exit 1
+}
+
+[ $# -lt 1 ] && usage
+PROGRAM="$1"; shift
+
+N_INPUTS=""
+STOFFEL_MPC_BACKEND="honeybadger"
+STOFFEL_MPC_CURVE="bls12-381"
+NUM_PARTIES="5"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --input-total) N_INPUTS="$2"; shift 2 ;;
+        --curve)       STOFFEL_MPC_CURVE="$2"; shift 2 ;;
+        --num-parties) NUM_PARTIES="$2"; shift 2 ;;
+        --threshold)   THRESHOLD="$2"; shift 2 ;;
+        --backend)
+            case "$2" in
+                avss|honeybadger) STOFFEL_MPC_BACKEND="$2" ;;
+                *) echo "Invalid backend: $2 (expected avss or honeybadger)" >&2; usage ;;
+            esac
+            shift 2 ;;
+        *) echo "Unknown option: $1" >&2; usage ;;
+    esac
+done
+
+case "$THRESHOLD" in
+    ''|*[!0-9]*) echo "Invalid --threshold: $THRESHOLD (expected an integer)" >&2; usage ;;
+esac
+MIN_PARTIES=$((2 * THRESHOLD + 1))
+
+case "$NUM_PARTIES" in
+    ''|*[!0-9]*) echo "Invalid --num-parties: $NUM_PARTIES (expected an integer)" >&2; usage ;;
+esac
+if [ "$NUM_PARTIES" -lt "$MIN_PARTIES" ] || [ "$NUM_PARTIES" -gt "$DEPLOYED_PARTIES" ]; then
+    echo "Invalid --num-parties: $NUM_PARTIES (must be between $MIN_PARTIES and $DEPLOYED_PARTIES for threshold $THRESHOLD)" >&2
+    usage
+fi
+LAST_PARTY=$((NUM_PARTIES - 1))
+
+PROGRAM_PATH="/app/programs/$(basename "$PROGRAM")"
+
+NODE_CERTS=""
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    NODE_CERTS="${NODE_CERTS:+$NODE_CERTS,}/app/ids/pub/nodes/node${IDX}.crt"
+    IDX=$((IDX + 1))
+done
+
+ENV_OVERRIDES='{"name":"STOFFEL_PROGRAM","value":"'"$PROGRAM_PATH"'"}'
+if [ -n "$N_INPUTS" ]; then
+    ENV_OVERRIDES="$ENV_OVERRIDES"',{"name":"STOFFEL_CLIENT_INPUT_TOTAL","value":"'"$N_INPUTS"'"}'
+fi
+ENV_OVERRIDES="$ENV_OVERRIDES"',{"name":"STOFFEL_MPC_BACKEND","value":"'"$STOFFEL_MPC_BACKEND"'"},{"name":"STOFFEL_MPC_CURVE","value":"'"$STOFFEL_MPC_CURVE"'"},{"name":"STOFFEL_N_PARTIES","value":"'"$NUM_PARTIES"'"},{"name":"STOFFEL_THRESHOLD","value":"'"$THRESHOLD"'"}'
+OVERRIDES='{"containerOverrides":[{"name":"Container","environment":['"$ENV_OVERRIDES"']}]}'
+
+STACK="StoffelUserDeploymentStack"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+CLUSTER=$(get_output ClusterName)
+SG=$(get_output SecurityGroupId)
+SUBNETS=$(get_output SubnetIds)
+NETWORK="awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG],assignPublicIp=ENABLED}"
+
+ALL_OUTPUTS=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+    --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' \
+    --output text)
+
+# Reset client env file
+printf '#!/bin/sh\n' > client-env.sh
+# Reset log env file
+printf '#!/bin/sh\n' > log-env.sh
+
+# --- Purge stale Cloud Map registrations from any previous run ---
+# Each run registers a new instance ID (derived from the task ARN), so old
+# instances are never automatically removed. If they linger, DNS returns both
+# the dead IP and the new one, and parties may pick the wrong address and fail
+# to reach the bootnode, causing the 120 s session-announcement timeout.
+echo "Cleaning up stale Cloud Map registrations..."
+
+COORD_CM_ARN=$(echo "$ALL_OUTPUTS" | awk '$1 == "CoordCloudMapArn" {print $2}')
+COORD_CM_ID=$(echo "$COORD_CM_ARN" | sed 's|.*/||')
+STALE=$(aws servicediscovery list-instances --service-id "$COORD_CM_ID" \
+    --query 'Instances[*].Id' --output text 2>/dev/null)
+for INST in $STALE; do
+    echo "  deregistering stale instance $INST from coordinator service..."
+    aws servicediscovery deregister-instance --service-id "$COORD_CM_ID" --instance-id "$INST"
+done
+
+for IDX in 0 1 2 3 4 5 6 7 8 9; do
+    SVC_ARN=$(echo "$ALL_OUTPUTS" | awk -v k="Party${IDX}CloudMapArn" '$1 == k {print $2}')
+    SVC_ID=$(echo "$SVC_ARN" | sed 's|.*/||')
+    STALE=$(aws servicediscovery list-instances --service-id "$SVC_ID" \
+        --query 'Instances[*].Id' --output text 2>/dev/null)
+    for INST in $STALE; do
+        echo "  deregistering stale instance $INST from party${IDX} service..."
+        aws servicediscovery deregister-instance --service-id "$SVC_ID" --instance-id "$INST"
+    done
+done
+
+# --- Start coordinator ---
+COORD_TASKDEF=$(echo "$ALL_OUTPUTS" | awk '$1 == "CoordTaskDef" {print $2}')
+
+# Read the task definition command; update --n-inputs if --input-total was given,
+# and pin --n / --initial-mpc-nodes down to the selected party subset.
+COORD_OVERRIDES=$(aws ecs describe-task-definition \
+    --task-definition "$COORD_TASKDEF" \
+    --query 'taskDefinition.containerDefinitions[0].command' \
+    --output json | python3 -c "
+import json, sys
+cmd = json.load(sys.stdin)
+n_inputs, backend, curve, num_parties, node_certs, threshold = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
+if n_inputs:
+    if '--n-inputs' in cmd:
+        idx = cmd.index('--n-inputs')
+        cmd[idx + 1] = n_inputs
+    else:
+        cmd.extend(['--n-inputs', n_inputs])
+if backend and '--backend' in cmd:
+    idx = cmd.index('--backend')
+    cmd[idx + 1] = backend
+if '--n' in cmd:
+    idx = cmd.index('--n')
+    cmd[idx + 1] = num_parties
+if '--t' in cmd:
+    idx = cmd.index('--t')
+    cmd[idx + 1] = threshold
+if '--initial-mpc-nodes' in cmd:
+    idx = cmd.index('--initial-mpc-nodes')
+    cmd[idx + 1] = node_certs
+env = [{'name': 'STOFFEL_MPC_BACKEND', 'value': backend}, {'name': 'STOFFEL_MPC_CURVE', 'value': curve}, {'name': 'STOFFEL_THRESHOLD', 'value': threshold}, {'name': 'STOFFEL_N_PARTIES', 'value': num_parties}]
+print(json.dumps({'containerOverrides': [{'name': 'Container', 'command': cmd, 'environment': env}]}))
+" "$N_INPUTS" "$STOFFEL_MPC_BACKEND" "$STOFFEL_MPC_CURVE" "$NUM_PARTIES" "$NODE_CERTS" "$THRESHOLD")
+
+echo "Starting Stoffel cluster..."
+[ -n "$N_INPUTS" ] && echo "  input total:   ${N_INPUTS}"
+echo "  backend:       ${STOFFEL_MPC_BACKEND}"
+echo "  curve:         ${STOFFEL_MPC_CURVE}"
+echo "  parties:       ${NUM_PARTIES} of ${DEPLOYED_PARTIES}"
+echo "  threshold:     ${THRESHOLD}"
+
+echo "Starting coordinator..."
+COORD_RUN_OUTPUT=$(aws ecs run-task \
+    --cluster "$CLUSTER" \
+    --launch-type FARGATE \
+    --task-definition "$COORD_TASKDEF" \
+    --network-configuration "$NETWORK" \
+    --overrides "$COORD_OVERRIDES" \
+    --output json)
+COORD_TASK_ARN=$(echo "$COORD_RUN_OUTPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['tasks'][0]['taskArn'] if d.get('tasks') else '')" 2>/dev/null)
+if [ -z "$COORD_TASK_ARN" ]; then
+    echo "ERROR: coordinator task failed to launch:" >&2
+    echo "$COORD_RUN_OUTPUT" | python3 -c "import json,sys; [print(' ',f) for f in json.load(sys.stdin).get('failures',[])]" >&2
+    exit 1
+fi
+echo "  task: $COORD_TASK_ARN"
+
+echo "  Waiting for coordinator to reach RUNNING..."
+aws ecs wait tasks-running --cluster "$CLUSTER" --tasks "$COORD_TASK_ARN"
+
+COORD_PRIVATE_IP=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$COORD_TASK_ARN" \
+    --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='privateIPv4Address'].value | [0]" \
+    --output text)
+COORD_ENI=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$COORD_TASK_ARN" \
+    --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='networkInterfaceId'].value | [0]" \
+    --output text)
+COORD_PUBLIC_IP=$(aws ec2 describe-network-interfaces --network-interface-ids "$COORD_ENI" \
+    --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+
+COORD_INSTANCE_ID=$(echo "$COORD_TASK_ARN" | sed 's|.*/||')
+echo "  Registering coordinator (IP: $COORD_PRIVATE_IP) with Cloud Map service $COORD_CM_ID..."
+aws servicediscovery register-instance \
+    --service-id "$COORD_CM_ID" \
+    --instance-id "$COORD_INSTANCE_ID" \
+    --attributes "AWS_INSTANCE_IPV4=$COORD_PRIVATE_IP"
+
+echo "  coordinator public IP: $COORD_PUBLIC_IP"
+echo "COORD_PUBLIC_IP=$COORD_PUBLIC_IP" >> client-env.sh
+echo "COORD_LOG_STREAM=coordinator/Container/$COORD_INSTANCE_ID" >> log-env.sh
+
+# --- Start party0 first and register it with Cloud Map ---
+# Parties 1-4 resolve party0's address via DNS (party0.stoffel-coord.local),
+# so party0 must be in Cloud Map before the others start.
+TASKDEF=$(echo "$ALL_OUTPUTS" | awk '$1 == "Party0TaskDef" {print $2}')
+LOG_GROUP=$(aws ecs describe-task-definition --task-definition "$TASKDEF" \
+    --query 'taskDefinition.containerDefinitions[0].logConfiguration.options."awslogs-group"' \
+    --output text)
+echo "LOG_GROUP=$LOG_GROUP" >> log-env.sh
+CM_ARN=$(echo "$ALL_OUTPUTS" | awk '$1 == "Party0CloudMapArn" {print $2}')
+CM_SVC_ID=$(echo "$CM_ARN" | sed 's|.*/||')
+
+echo "Starting party0..."
+PARTY0_RUN_OUTPUT=$(aws ecs run-task \
+    --cluster "$CLUSTER" \
+    --launch-type FARGATE \
+    --task-definition "$TASKDEF" \
+    --network-configuration "$NETWORK" \
+    --overrides "$OVERRIDES" \
+    --output json)
+PARTY0_ARN=$(echo "$PARTY0_RUN_OUTPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['tasks'][0]['taskArn'] if d.get('tasks') else '')" 2>/dev/null)
+if [ -z "$PARTY0_ARN" ]; then
+    echo "ERROR: party0 task failed to launch:" >&2
+    echo "$PARTY0_RUN_OUTPUT" | python3 -c "import json,sys; [print(' ',f) for f in json.load(sys.stdin).get('failures',[])]" >&2
+    exit 1
+fi
+echo "  task: $PARTY0_ARN"
+
+echo "  Waiting for party0 to reach RUNNING..."
+aws ecs wait tasks-running --cluster "$CLUSTER" --tasks "$PARTY0_ARN"
+
+PRIVATE_IP=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$PARTY0_ARN" \
+    --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='privateIPv4Address'].value | [0]" \
+    --output text)
+PUBLIC_IP=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$PARTY0_ARN" \
+    --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='networkInterfaceId'].value | [0]" \
+    --output text \
+    | xargs -I{} aws ec2 describe-network-interfaces --network-interface-ids {} \
+        --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+
+INSTANCE_ID=$(echo "$PARTY0_ARN" | sed 's|.*/||')
+echo "  Registering party0 (IP: $PRIVATE_IP) with Cloud Map service $CM_SVC_ID..."
+aws servicediscovery register-instance \
+    --service-id "$CM_SVC_ID" \
+    --instance-id "$INSTANCE_ID" \
+    --attributes "AWS_INSTANCE_IPV4=$PRIVATE_IP"
+
+echo "  party0 public IP: $PUBLIC_IP"
+echo "PARTY0_PUBLIC_IP=$PUBLIC_IP" >> client-env.sh
+echo "PARTY0_LOG_STREAM=party0/Container/$INSTANCE_ID" >> log-env.sh
+
+# --- Start parties 1..LAST_PARTY simultaneously to beat the 120s bootnode session timeout ---
+# The timeout runs from when party0 first registers with the bootnode, so all parties
+# must join before party0's 120s window expires.
+echo "Starting parties 1-${LAST_PARTY} in parallel..."
+ALL_REMAINING_ARNS=""
+IDX=1
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    TASKDEF=$(echo "$ALL_OUTPUTS" | awk -v k="Party${IDX}TaskDef" '$1 == k {print $2}')
+    RUN_OUTPUT=$(aws ecs run-task \
+        --cluster "$CLUSTER" \
+        --launch-type FARGATE \
+        --task-definition "$TASKDEF" \
+        --network-configuration "$NETWORK" \
+        --overrides "$OVERRIDES" \
+        --output json)
+    TASK_ARN=$(echo "$RUN_OUTPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['tasks'][0]['taskArn'] if d.get('tasks') else '')" 2>/dev/null)
+    if [ -z "$TASK_ARN" ]; then
+        echo "ERROR: party${IDX} task failed to launch:" >&2
+        echo "$RUN_OUTPUT" | python3 -c "import json,sys; [print(' ',f) for f in json.load(sys.stdin).get('failures',[])]" >&2
+        exit 1
+    fi
+    echo "  party${IDX} task: $TASK_ARN"
+    ALL_REMAINING_ARNS="$ALL_REMAINING_ARNS $TASK_ARN"
+    eval "TASK_ARN_${IDX}=$TASK_ARN"
+    IDX=$((IDX + 1))
+done
+
+echo "  Waiting for parties 1-${LAST_PARTY} to reach RUNNING..."
+echo "$ALL_REMAINING_ARNS" | xargs aws ecs wait tasks-running --cluster "$CLUSTER" --tasks
+
+IDX=1
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    eval "TASK_ARN=\$TASK_ARN_${IDX}"
+    CM_ARN=$(echo "$ALL_OUTPUTS" | awk -v k="Party${IDX}CloudMapArn" '$1 == k {print $2}')
+    CM_SVC_ID=$(echo "$CM_ARN" | sed 's|.*/||')
+
+    PRIVATE_IP=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+        --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='privateIPv4Address'].value | [0]" \
+        --output text)
+    PUBLIC_IP=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+        --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[] | [?name=='networkInterfaceId'].value | [0]" \
+        --output text \
+        | xargs -I{} aws ec2 describe-network-interfaces --network-interface-ids {} \
+            --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+
+    INSTANCE_ID=$(echo "$TASK_ARN" | sed 's|.*/||')
+    echo "  Registering party${IDX} (IP: $PRIVATE_IP) with Cloud Map service $CM_SVC_ID..."
+    aws servicediscovery register-instance \
+        --service-id "$CM_SVC_ID" \
+        --instance-id "$INSTANCE_ID" \
+        --attributes "AWS_INSTANCE_IPV4=$PRIVATE_IP"
+
+    echo "  party${IDX} public IP: $PUBLIC_IP"
+    echo "PARTY${IDX}_PUBLIC_IP=$PUBLIC_IP" >> client-env.sh
+    echo "PARTY${IDX}_LOG_STREAM=party${IDX}/Container/$INSTANCE_ID" >> log-env.sh
+    IDX=$((IDX + 1))
+done
+
+echo "CLUSTER=$CLUSTER" >> log-env.sh
+echo "ALL_TASK_ARNS=\"$COORD_TASK_ARN $PARTY0_ARN$ALL_REMAINING_ARNS\"" >> log-env.sh
+
+echo "All nodes started."
+echo ""
+echo "Client environment written to client-env.sh — run './run-client <client_id> <inputs>' to start a client."
+echo "Log streams written to log-env.sh."

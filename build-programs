@@ -1,0 +1,34 @@
+#!/bin/sh
+# Build every Stoffel program under ./src and collect the resulting .stflb
+# bytecode into ./programs/, named after the src/ subdirectory (not the
+# package name in Stoffel.toml — several of these projects share a package
+# name, e.g. adkg/adkg-sign/thresh-ecdsa all build "adkg.stflb" by default).
+#
+# Usage: ./build-programs
+
+set -e
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+STOFFEL="$ROOT/StoffelVM/target/debug/stoffel"
+SRC_DIR="$ROOT/src"
+OUT_DIR="$ROOT/programs"
+
+if [ ! -x "$STOFFEL" ]; then
+    echo "ERROR: $STOFFEL not found or not executable" >&2
+    echo "  Build it first: cd StoffelVM && cargo build" >&2
+    exit 1
+fi
+
+mkdir -p "$OUT_DIR"
+
+for dir in "$SRC_DIR"/*/; do
+    [ -f "$dir/Stoffel.toml" ] || continue
+    name=$(basename "$dir")
+    out="$OUT_DIR/$name.stflb"
+    echo "Building $name..."
+    ( cd "$dir" && "$STOFFEL" build -o "$out" )
+done
+
+echo ""
+echo "Done. Programs in $OUT_DIR:"
+ls -la "$OUT_DIR"

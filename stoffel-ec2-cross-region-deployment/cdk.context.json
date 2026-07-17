@@ -56,5 +56,25 @@
     "ap-northeast-1a",
     "ap-northeast-1c",
     "ap-northeast-1d"
+  ],
+  "availability-zones:account=304931607458:region=eu-west-3": [
+    "eu-west-3a",
+    "eu-west-3b",
+    "eu-west-3c"
+  ],
+  "availability-zones:account=304931607458:region=eu-north-1": [
+    "eu-north-1a",
+    "eu-north-1b",
+    "eu-north-1c"
+  ],
+  "availability-zones:account=304931607458:region=sa-east-1": [
+    "sa-east-1a",
+    "sa-east-1b",
+    "sa-east-1c"
+  ],
+  "availability-zones:account=304931607458:region=eu-south-2": [
+    "eu-south-2a",
+    "eu-south-2b",
+    "eu-south-2c"
   ]
 }

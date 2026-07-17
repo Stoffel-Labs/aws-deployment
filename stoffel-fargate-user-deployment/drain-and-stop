@@ -1,0 +1,71 @@
+#!/bin/sh
+# Emergency stop: purge every queued job and forcibly stop whatever is
+# currently running. This affects ALL users' pending/in-flight jobs, not
+# just your own - the queue, cluster, and lock are shared.
+#
+# Stopping the Step Functions execution alone is not enough: its .sync
+# integration only makes a best-effort attempt to stop the orchestrator task,
+# not the coordinator/party tasks the orchestrator itself launched via its own
+# boto3 calls (invisible to Step Functions). So this stops ECS tasks directly,
+# and separately releases the DynamoDB lock, since nothing else does that on
+# an aborted run - without it every future queued job stays blocked forever.
+#
+# Usage: ./drain-and-stop
+set -e
+
+STACK="StoffelUserDeploymentStack"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+QUEUE_URL=$(get_output JobsQueueUrl)
+CLUSTER=$(get_output ClusterName)
+STATE_MACHINE_ARN=$(get_output StateMachineArn)
+JOBS_TABLE=$(get_output JobsTableName)
+LOCK_TABLE=$(aws cloudformation describe-stack-resources --stack-name "$STACK" \
+    --query "StackResources[?ResourceType=='AWS::DynamoDB::Table' && contains(LogicalResourceId, 'LockTable')].PhysicalResourceId" \
+    --output text)
+
+echo "Purging queue..."
+aws sqs purge-queue --queue-url "$QUEUE_URL"
+
+echo "Stopping running Step Functions executions..."
+for EXEC_ARN in $(aws stepfunctions list-executions --state-machine-arn "$STATE_MACHINE_ARN" \
+        --status-filter RUNNING --query 'executions[*].executionArn' --output text); do
+    echo "  stopping $EXEC_ARN"
+    aws stepfunctions stop-execution --execution-arn "$EXEC_ARN" --cause "manual drain-and-stop" >/dev/null
+done
+
+echo "Stopping running ECS tasks (orchestrator + coordinator + parties)..."
+for TASK_ARN in $(aws ecs list-tasks --cluster "$CLUSTER" --desired-status RUNNING --query 'taskArns' --output text); do
+    echo "  stopping $TASK_ARN"
+    aws ecs stop-task --cluster "$CLUSTER" --task "$TASK_ARN" --reason "manual drain-and-stop" >/dev/null
+done
+
+echo "Releasing the job lock..."
+aws dynamodb delete-item --table-name "$LOCK_TABLE" --key '{"lock_id": {"S": "jobs"}}'
+
+echo "Marking in-flight job records..."
+NOW=$(python3 -c "import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())")
+aws dynamodb scan --table-name "$JOBS_TABLE" \
+    --filter-expression "#s IN (:queued, :running)" \
+    --expression-attribute-names '{"#s":"status"}' \
+    --expression-attribute-values '{":queued":{"S":"QUEUED"},":running":{"S":"RUNNING"}}' \
+    --query 'Items[*].[job_id.S,status.S]' --output text |
+while read -r JOB_ID OLD_STATUS; do
+    [ -z "$JOB_ID" ] && continue
+    NEW_STATUS="FAILED"
+    [ "$OLD_STATUS" = "QUEUED" ] && NEW_STATUS="CANCELLED"
+    echo "  $JOB_ID: $OLD_STATUS -> $NEW_STATUS"
+    aws dynamodb update-item --table-name "$JOBS_TABLE" \
+        --key "{\"job_id\": {\"S\": \"$JOB_ID\"}}" \
+        --update-expression "SET #s = :s, finished_at = :f, #e = :err" \
+        --expression-attribute-names '{"#s":"status","#e":"error"}' \
+        --expression-attribute-values "{\":s\":{\"S\":\"$NEW_STATUS\"},\":f\":{\"S\":\"$NOW\"},\":err\":{\"S\":\"manually stopped via drain-and-stop\"}}" \
+        >/dev/null
+done
+
+echo "Done."

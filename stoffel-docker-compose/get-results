@@ -1,0 +1,225 @@
+#!/bin/sh
+# Aggregate each container's post-run ping output (coordinator + every party
+# pings everyone else, via Docker's built-in DNS — see the ping loops baked
+# into gen-docker-compose) into an RTT matrix, written as CSV. Also pulls
+# every node's BENCH_PP_SECS/BENCH_EXEC_SECS lines (printed by stoffel-run
+# right before it exits, same as the ping lines) and reports min/max/average
+# preprocessing and execution time across nodes.
+#
+# Usage: ./get-results [output-csv]
+#   Row/column 0 is the coordinator, row/column i+1 is node i.
+#   (default output: ping-matrix.csv)
+
+set -e
+
+usage() {
+    echo "Usage: $0 [output-csv]" >&2
+    echo "  Waits for all party containers to stop (the coordinator keeps" >&2
+    echo "  running, so it isn't waited on), then" >&2
+    echo "  aggregates each container's full-mesh ping output into an RTT matrix," >&2
+    echo "  written as CSV. Row/column 0 is the coordinator, row/column i+1 is" >&2
+    echo "  node i. Also reports min/max/average RTT across all inter-party" >&2
+    echo "  pairs. (default output: ping-matrix.csv)" >&2
+    echo "" >&2
+    echo "  In addition, pulls every node's BENCH_PP_SECS/BENCH_EXEC_SECS lines" >&2
+    echo "  (already present in the same logs, since every node prints its" >&2
+    echo "  benchmark lines before exiting, same as the ping lines) and reports" >&2
+    echo "  min/max/average preprocessing and execution time across nodes." >&2
+    exit 1
+}
+
+case "$1" in -h|--help) usage ;; esac
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+COMPOSE="docker compose -f $DIR/docker-compose.yml"
+OUT_CSV="${1:-$DIR/ping-matrix.csv}"
+
+[ -f "$DIR/docker-compose.yml" ] || { echo "ERROR: docker-compose.yml not found. Run ./run-nodes first." >&2; exit 1; }
+
+SERVICES=$($COMPOSE config --services 2>/dev/null)
+ACTIVE_PARTIES=""
+IDX=0
+while [ "$IDX" -le 9 ]; do
+    if echo "$SERVICES" | grep -qx "party${IDX}"; then
+        ACTIVE_PARTIES="$ACTIVE_PARTIES party${IDX}"
+    fi
+    IDX=$((IDX + 1))
+done
+
+echo "Waiting for all node containers to stop (so log output is complete)..."
+# The coordinator keeps running after its pings finish, so it never stops on
+# its own; only wait on the party containers. "compose wait" only knows about
+# containers Compose still considers current (i.e. still running when
+# invoked) — if a container already exited before we get here, wait can't
+# attach to it and fails with "no containers for project ...". Only wait on
+# services that are still running; anything already stopped is, by
+# definition, done.
+RUNNING=$($COMPOSE ps --status=running --services 2>/dev/null)
+TO_WAIT=""
+for SVC in $ACTIVE_PARTIES; do
+    if echo "$RUNNING" | grep -qx "$SVC"; then
+        TO_WAIT="$TO_WAIT $SVC"
+    fi
+done
+if [ -n "$TO_WAIT" ]; then
+    # shellcheck disable=SC2086
+    $COMPOSE wait $TO_WAIT
+fi
+
+RAW=$(mktemp)
+trap 'rm -f "$RAW"' EXIT
+
+# Pull a container's full log and tag each line with the entity name it
+# came from, e.g. "coord\t<message>".
+fetch_service() {
+    LABEL="$1"
+    SERVICE="$2"
+    $COMPOSE logs --no-log-prefix "$SERVICE" 2>/dev/null | python3 -c "
+import sys
+for line in sys.stdin:
+    sys.stdout.write('$LABEL\t' + line)
+" >> "$RAW"
+}
+
+echo "Fetching log lines..."
+echo "  coordinator..."
+fetch_service "coord" "coordinator"
+
+IDX=0
+while [ "$IDX" -le 9 ]; do
+    if echo "$SERVICES" | grep -qx "party${IDX}"; then
+        echo "  node${IDX}..."
+        fetch_service "node${IDX}" "party${IDX}"
+    fi
+    IDX=$((IDX + 1))
+done
+
+python3 -c "
+import csv, re, sys
+
+entries = []  # (source, message)
+with open(sys.argv[2]) as f:
+    for line in f:
+        source, _, message = line.rstrip('\n').partition('\t')
+        if source:
+            entries.append((source, message))
+
+node_indices = sorted(
+    {int(m.group(1)) for src, _ in entries if (m := re.fullmatch(r'node(\d+)', src))}
+)
+entities = ['coord'] + [f'node{i}' for i in node_indices]
+
+# Ping targets are logged as 'coordinator' or 'partyN'; map them onto the
+# same entity names used for sources ('coord' / 'nodeN').
+def normalize_target(target):
+    if target == 'coordinator':
+        return 'coord'
+    m = re.fullmatch(r'party(\d+)', target)
+    return f'node{m.group(1)}' if m else None
+
+rtts = {}  # (source, target) -> avg rtt ms
+pending_target = None
+for source, message in entries:
+    m = re.match(r'Pinging (\S+)\.\.\.', message)
+    if m:
+        pending_target = normalize_target(m.group(1))
+        continue
+    m = re.search(r'rtt min/avg/max/mdev = [\d.]+/([\d.]+)/[\d.]+/[\d.]+ ms', message)
+    if m and pending_target:
+        rtts[(source, pending_target)] = float(m.group(1))
+        pending_target = None
+
+def cell(i, j):
+    if i == j:
+        return ''
+    a, b = entities[i], entities[j]
+    fwd, back = rtts.get((a, b)), rtts.get((b, a))
+    if fwd is not None and back is not None:
+        return f'{(fwd + back) / 2:.3f}'
+    if fwd is not None:
+        return f'{fwd:.3f}'
+    if back is not None:
+        return f'{back:.3f}'
+    return ''
+
+# BENCH_PP_SECS/BENCH_EXEC_SECS are each printed once per node, right before
+# the container exits (see stoffel-run.rs), same as the ping lines — so
+# they're already in the log lines fetched above, no extra docker calls
+# needed. A node can log more than one of either line (e.g. avss vs
+# standard-backend code paths); take the last one.
+pp_secs = {}
+exec_secs = {}
+for source, message in entries:
+    if not re.fullmatch(r'node\d+', source):
+        continue
+    m = re.search(r'BENCH_PP_SECS: (\S+)', message)
+    if m:
+        try:
+            pp_secs[source] = float(m.group(1))
+        except ValueError:
+            pass
+    m = re.search(r'BENCH_EXEC_SECS: (\S+)', message)
+    if m:
+        try:
+            exec_secs[source] = float(m.group(1))
+        except ValueError:
+            pass
+
+with open(sys.argv[1], 'w', newline='') as f:
+    writer = csv.writer(f)
+    for i in range(len(entities)):
+        writer.writerow([cell(i, j) for j in range(len(entities))])
+    # Exclude the coordinator (row/column 0) so min/max/avg reflect only
+    # inter-party RTTs, not party<->coordinator RTTs.
+    values = [rtt for (src, tgt), rtt in rtts.items() if src != 'coord' and tgt != 'coord']
+    writer.writerow([])
+    writer.writerow(['min', f'{min(values):.3f}' if values else ''])
+    writer.writerow(['max', f'{max(values):.3f}' if values else ''])
+    writer.writerow(['average', f'{sum(values) / len(values):.3f}' if values else ''])
+
+    writer.writerow([])
+    writer.writerow(['node'] + [f'node{i}' for i in node_indices])
+    writer.writerow(['pp_secs'] + [f'{pp_secs[f\"node{i}\"]:.3f}' if f'node{i}' in pp_secs else '' for i in node_indices])
+    writer.writerow(['exec_secs'] + [f'{exec_secs[f\"node{i}\"]:.3f}' if f'node{i}' in exec_secs else '' for i in node_indices])
+
+    pp_values = list(pp_secs.values())
+    exec_values = list(exec_secs.values())
+    writer.writerow([])
+    writer.writerow(['', 'min', 'max', 'average'])
+    writer.writerow(['pp_secs',
+                      f'{min(pp_values):.3f}' if pp_values else '',
+                      f'{max(pp_values):.3f}' if pp_values else '',
+                      f'{sum(pp_values) / len(pp_values):.3f}' if pp_values else ''])
+    writer.writerow(['exec_secs',
+                      f'{min(exec_values):.3f}' if exec_values else '',
+                      f'{max(exec_values):.3f}' if exec_values else '',
+                      f'{sum(exec_values) / len(exec_values):.3f}' if exec_values else ''])
+
+print(f'Wrote {len(entities)}x{len(entities)} RTT matrix and {len(node_indices)}-node benchmark stats to {sys.argv[1]}')
+
+missing_pp = [f'node{i}' for i in node_indices if f'node{i}' not in pp_secs]
+missing_exec = [f'node{i}' for i in node_indices if f'node{i}' not in exec_secs]
+if missing_pp:
+    print(f'WARNING: no BENCH_PP_SECS found for: {\", \".join(missing_pp)}', file=sys.stderr)
+if missing_exec:
+    print(f'WARNING: no BENCH_EXEC_SECS found for: {\", \".join(missing_exec)}', file=sys.stderr)
+
+print('')
+print('RTT across nodes:')
+if values:
+    print(f'  min: {min(values):.3f}ms  max: {max(values):.3f}ms  avg: {sum(values) / len(values):.3f}ms  (n={len(values)})')
+else:
+    print('  no RTT values found')
+
+print('Preprocessing time (BENCH_PP_SECS) across nodes:')
+if pp_values:
+    print(f'  min: {min(pp_values):.3f}s  max: {max(pp_values):.3f}s  avg: {sum(pp_values) / len(pp_values):.3f}s  (n={len(pp_values)})')
+else:
+    print('  no BENCH_PP_SECS values found')
+
+print('Execution time (BENCH_EXEC_SECS) across nodes:')
+if exec_values:
+    print(f'  min: {min(exec_values):.3f}s  max: {max(exec_values):.3f}s  avg: {sum(exec_values) / len(exec_values):.3f}s  (n={len(exec_values)})')
+else:
+    print('  no BENCH_EXEC_SECS values found')
+" "$OUT_CSV" "$RAW"

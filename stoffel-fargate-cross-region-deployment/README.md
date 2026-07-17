@@ -36,8 +36,10 @@ addresses it's actually given at launch.
 Defined in `regions.conf` (`COORD_REGION` / `PARTY_REGIONS`) — the single
 source of truth read by both `app.py` (CDK) and `regions` (sourced by the
 other shell scripts). Edit only `regions.conf` to add, remove, or move a
-party's region; `N_PARTIES` in `app.py` derives from the length of
-`PARTY_REGIONS` automatically.
+party's region; the available party count in `app.py` derives from the
+length of `PARTY_REGIONS` automatically. By default only the first 5 of
+those regions get a deployed party stack; use the `num_nodes` CDK context
+variable to deploy more (or fewer) (see [CDK context](#cdk-context)).
 
 | Node | Region |
 |---|---|
@@ -126,11 +128,32 @@ Runs `n_iterations` rounds and appends timing and memory metrics per node
 
 ## CDK context
 
-No required context variables. The auth token can be passed at deploy time:
+No required context variables.
+
+The auth token can be passed at deploy time:
 
 ```sh
 cdk deploy --context auth_token=<token> "Stoffel*"
 ```
+
+By default, the first 5 regions in `regions.conf` get a party stack. To
+deploy a different number of them, pass `num_nodes`; it must be between
+`2*threshold+1` and the number of regions listed in `regions.conf`:
+
+```sh
+cdk deploy --context num_nodes=3 "Stoffel*"
+```
+
+The MPC threshold `t` defaults to 1 and can be overridden with `threshold`
+(remember `num_nodes` must be `>= 2t+1`):
+
+```sh
+cdk deploy --context threshold=2 --context num_nodes=5 "Stoffel*"
+```
+
+Note this only controls how many party *stacks* get deployed — it's
+independent of `run-nodes`' own `--num-parties`, which selects how many of
+the *already-deployed* parties actually start for a given run.
 
 ## Notes
 

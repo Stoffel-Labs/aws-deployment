@@ -1,0 +1,186 @@
+#!/bin/sh
+# Fetch a job's logs via the API and aggregate its ping RTTs and
+# BENCH_PP_SECS/BENCH_EXEC_SECS benchmark lines (each node prints these
+# right before its container exits - see lambdas/start_job.py's ping_snippet
+# and entry scripts) into an RTT matrix + timing stats, written as CSV. This
+# is the job-API analog of ../stoffel-ec2-cross-region-deployment/get-results,
+# which pulls the same lines straight from CloudWatch given a log-env-file;
+# here there's no log-env-file, just the job_id.
+#
+# Usage: API_URL=... API_KEY=... ./get-results <job_id> [output-csv]
+set -e
+
+usage() {
+    echo "Usage: API_URL=... API_KEY=... $0 <job_id> [output-csv]" >&2
+    exit 1
+}
+
+[ $# -lt 1 ] && usage
+JOB_ID="$1"
+OUT_CSV="${2:-results.csv}"
+
+if [ -z "$API_URL" ]; then
+    echo "ERROR: API_URL is not set." >&2
+    exit 1
+fi
+if [ -z "$API_KEY" ]; then
+    echo "ERROR: API_KEY is not set." >&2
+    exit 1
+fi
+API_URL="${API_URL%/}"
+
+# Wait for the job to reach a terminal state first: ping/BENCH_* lines are
+# only printed right before each container exits, so fetching logs any
+# earlier would give an incomplete matrix/stats (see README: "get-logs ...
+# output is partial/incomplete until the job actually finishes").
+while :; do
+    STATUS_RESPONSE=$(curl -sf "$API_URL/jobs/$JOB_ID" -H "x-api-key: $API_KEY") || {
+        echo "ERROR: curl failed (exit $?) fetching status for $JOB_ID" >&2
+        exit 1
+    }
+    STATUS=$(echo "$STATUS_RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status', ''))")
+    echo "Job $JOB_ID status: $STATUS"
+    case "$STATUS" in
+        SUCCEEDED|FAILED) break ;;
+        *) sleep 5 ;;
+    esac
+done
+[ "$STATUS" = "FAILED" ] && echo "WARNING: job $JOB_ID ended as FAILED - results may be incomplete" >&2
+
+RESPONSE=$(curl -sf "$API_URL/jobs/$JOB_ID/logs" -H "x-api-key: $API_KEY") || {
+    echo "ERROR: curl failed (exit $?) fetching logs for $JOB_ID" >&2
+    exit 1
+}
+
+echo "$RESPONSE" | python3 -c "
+import csv, json, re, sys
+
+data = json.load(sys.stdin)
+if 'logs' not in data:
+    print(f'error: {data.get(\"error\", data)}', file=sys.stderr)
+    sys.exit(1)
+
+# The API's log_streams/logs keys are 'coordinator'/'party<i>' (see
+# lambdas/start_job.py), but the ping lines *inside* those logs name peers
+# 'coord'/'node<i>' (same file's addr_book/ping_snippet) - normalize source
+# labels to match so RTT lookups below can match source and target names.
+def normalize_source(node):
+    if node == 'coordinator':
+        return 'coord'
+    m = re.fullmatch(r'party(\d+)', node)
+    return f'node{m.group(1)}' if m else node
+
+entries = []  # (source, message)
+for node, lines in data['logs'].items():
+    source = normalize_source(node)
+    for entry in lines:
+        message = entry.get('message', '') if isinstance(entry, dict) else entry
+        entries.append((source, message))
+
+node_indices = sorted(
+    {int(m.group(1)) for src, _ in entries if (m := re.fullmatch(r'node(\d+)', src))}
+)
+entities = ['coord'] + [f'node{i}' for i in node_indices]
+
+def normalize_target(target):
+    return target if target == 'coord' or re.fullmatch(r'node\d+', target) else None
+
+rtts = {}  # (source, target) -> rtt ms
+pending_target = None
+for source, message in entries:
+    m = re.match(r'Pinging (.+)\.\.\.\$', message)
+    if m:
+        pending_target = normalize_target(m.group(1))
+        continue
+    m = re.search(r'rtt min/avg/max/mdev = [\d.]+/([\d.]+)/[\d.]+/[\d.]+ ms', message)
+    if m and pending_target:
+        rtts[(source, pending_target)] = float(m.group(1))
+        pending_target = None
+
+def cell(i, j):
+    if i == j:
+        return ''
+    rtt = rtts.get((entities[i], entities[j]))
+    return f'{rtt:.3f}' if rtt is not None else ''
+
+# BENCH_PP_SECS/BENCH_EXEC_SECS are each printed once per node, right before
+# the container exits - same as the ping lines, so they're already in the
+# fetched log lines, no extra API calls needed. A node can log more than one
+# of either line; take the last one.
+pp_secs = {}
+exec_secs = {}
+for source, message in entries:
+    if not re.fullmatch(r'node\d+', source):
+        continue
+    m = re.search(r'BENCH_PP_SECS: (\S+)', message)
+    if m:
+        try:
+            pp_secs[source] = float(m.group(1))
+        except ValueError:
+            pass
+    m = re.search(r'BENCH_EXEC_SECS: (\S+)', message)
+    if m:
+        try:
+            exec_secs[source] = float(m.group(1))
+        except ValueError:
+            pass
+
+with open(sys.argv[1], 'w', newline='') as f:
+    writer = csv.writer(f)
+    writer.writerow(entities)
+    for i in range(len(entities)):
+        writer.writerow([cell(i, j) for j in range(len(entities))])
+    # Exclude the coordinator (row/column 0) so min/max/avg reflect only
+    # inter-party RTTs, not party<->coordinator RTTs.
+    values = [rtt for (src, tgt), rtt in rtts.items() if src != 'coord' and tgt != 'coord']
+    writer.writerow([])
+    writer.writerow(['min', f'{min(values):.3f}' if values else ''])
+    writer.writerow(['max', f'{max(values):.3f}' if values else ''])
+    writer.writerow(['average', f'{sum(values) / len(values):.3f}' if values else ''])
+
+    writer.writerow([])
+    writer.writerow(['node'] + [f'node{i}' for i in node_indices])
+    writer.writerow(['pp_secs'] + [f'{pp_secs[f\"node{i}\"]:.3f}' if f'node{i}' in pp_secs else '' for i in node_indices])
+    writer.writerow(['exec_secs'] + [f'{exec_secs[f\"node{i}\"]:.3f}' if f'node{i}' in exec_secs else '' for i in node_indices])
+
+    pp_values = list(pp_secs.values())
+    exec_values = list(exec_secs.values())
+    writer.writerow([])
+    writer.writerow(['', 'min', 'max', 'average'])
+    writer.writerow(['pp_secs',
+                      f'{min(pp_values):.3f}' if pp_values else '',
+                      f'{max(pp_values):.3f}' if pp_values else '',
+                      f'{sum(pp_values) / len(pp_values):.3f}' if pp_values else ''])
+    writer.writerow(['exec_secs',
+                      f'{min(exec_values):.3f}' if exec_values else '',
+                      f'{max(exec_values):.3f}' if exec_values else '',
+                      f'{sum(exec_values) / len(exec_values):.3f}' if exec_values else ''])
+
+print(f'Wrote {len(entities)}x{len(entities)} RTT matrix and {len(node_indices)}-node benchmark stats to {sys.argv[1]}')
+
+missing_pp = [f'node{i}' for i in node_indices if f'node{i}' not in pp_secs]
+missing_exec = [f'node{i}' for i in node_indices if f'node{i}' not in exec_secs]
+if missing_pp:
+    print(f'WARNING: no BENCH_PP_SECS found for: {\", \".join(missing_pp)}', file=sys.stderr)
+if missing_exec:
+    print(f'WARNING: no BENCH_EXEC_SECS found for: {\", \".join(missing_exec)}', file=sys.stderr)
+
+print('')
+print('RTT across nodes:')
+if values:
+    print(f'  min: {min(values):.3f}ms  max: {max(values):.3f}ms  avg: {sum(values) / len(values):.3f}ms  (n={len(values)})')
+else:
+    print('  no RTT values found')
+
+print('Preprocessing time (BENCH_PP_SECS) across nodes:')
+if pp_values:
+    print(f'  min: {min(pp_values):.3f}s  max: {max(pp_values):.3f}s  avg: {sum(pp_values) / len(pp_values):.3f}s  (n={len(pp_values)})')
+else:
+    print('  no BENCH_PP_SECS values found')
+
+print('Execution time (BENCH_EXEC_SECS) across nodes:')
+if exec_values:
+    print(f'  min: {min(exec_values):.3f}s  max: {max(exec_values):.3f}s  avg: {sum(exec_values) / len(exec_values):.3f}s  (n={len(exec_values)})')
+else:
+    print('  no BENCH_EXEC_SECS values found')
+" "$OUT_CSV"

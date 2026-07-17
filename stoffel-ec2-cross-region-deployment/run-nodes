@@ -1,9 +1,12 @@
 #!/bin/sh
 set -e
 
-# Must match N_PARTIES / THRESHOLD in app.py: min_shares(t) = 2t+1 is the
-# smallest party count the deployed coordinator/nodes can run a session with.
-DEPLOYED_PARTIES=10
+# DEPLOYED_PARTIES is not hardcoded: it's probed from CloudFormation below
+# (how many StoffelParty<i>Stack stacks actually exist), so it always
+# reflects whatever num_nodes app.py was last deployed with
+# (`cdk deploy --context num_nodes=<n> --context threshold=<t>`; defaults
+# 4/1). min_shares(t) = 2t+1 is the smallest party count the deployed
+# coordinator/nodes can run a session with.
 THRESHOLD=1
 
 . "$(dirname "$0")/regions"
@@ -14,16 +17,18 @@ CONTAINER_NAME="stoffel-run"
 
 usage() {
     echo "Usage: $0 <program-filename> [--input-total <n>] [--backend avss|honeybadger] [--curve <curve>] [--num-parties <n>] [--threshold <t>]" >&2
-    echo "  e.g.: $0 client_mul.stflb --input-total 4 --backend avss --curve bls12-381 --num-parties 5 --threshold 1" >&2
+    echo "  e.g.: $0 client_mul.stflb --input-total 4 --backend avss --curve bls12-381 --num-parties 4 --threshold 1" >&2
     echo "" >&2
-    echo "$DEPLOYED_PARTIES parties are always deployed, one per region (see regions);" >&2
-    echo "--num-parties selects how many of them (party0..party<n-1>) are actually started" >&2
-    echo "(default: 5). --threshold sets t (default: $THRESHOLD); --num-parties must be >= 2t+1." >&2
+    echo "Parties are deployed one per region (see regions.conf); --num-parties selects" >&2
+    echo "how many of them (party0..party<n-1>) are actually started (default: 4), and is" >&2
+    echo "capped at however many StoffelParty*Stack stacks are actually deployed." >&2
+    echo "--threshold sets t (default: $THRESHOLD); --num-parties must be >= 2t+1." >&2
     echo "" >&2
     echo "The file must already be uploaded to S3 first:" >&2
     echo "  ./upload-program program.stflb" >&2
     echo "" >&2
-    echo "Set STOFFEL_AUTH_TOKEN in the environment to pass an auth token to every node." >&2
+    echo "Set STOFFEL_AUTH_TOKEN in the environment to pass an auth token to every node" >&2
+    echo "(default: 1)." >&2
     exit 1
 }
 
@@ -32,7 +37,7 @@ PROGRAM="${1:?$(usage)}"; shift
 N_INPUTS=""
 STOFFEL_MPC_BACKEND="honeybadger"
 STOFFEL_MPC_CURVE="bls12-381"
-NUM_PARTIES="5"
+NUM_PARTIES="4"
 while [ $# -gt 0 ]; do
     case "$1" in
         --input-total) N_INPUTS="$2"; shift 2 ;;
@@ -57,6 +62,29 @@ MIN_PARTIES=$((2 * THRESHOLD + 1))
 case "$NUM_PARTIES" in
     ''|*[!0-9]*) echo "Invalid --num-parties: $NUM_PARTIES (expected an integer)" >&2; usage ;;
 esac
+
+# --- Determine how many party stacks are actually deployed. Stacks are
+# deployed as a contiguous prefix of PARTY_REGIONS (see app.py), so probe
+# StoffelParty<i>Stack in region.conf order and stop at the first region
+# whose stack doesn't exist. This replaces a hardcoded count so run-nodes
+# always matches the live deployment instead of going stale after a
+# redeploy with a different --context num_nodes. ---
+DEPLOYED_PARTIES=0
+IDX=0
+for REGION in $PARTY_REGIONS; do
+    if aws cloudformation describe-stacks --stack-name "StoffelParty${IDX}Stack" --region "$REGION" \
+        >/dev/null 2>&1; then
+        DEPLOYED_PARTIES=$((IDX + 1))
+        IDX=$((IDX + 1))
+    else
+        break
+    fi
+done
+if [ "$DEPLOYED_PARTIES" -eq 0 ]; then
+    echo "ERROR: no StoffelParty*Stack deployments found — has the stack been deployed?" >&2
+    exit 1
+fi
+
 if [ "$NUM_PARTIES" -lt "$MIN_PARTIES" ] || [ "$NUM_PARTIES" -gt "$DEPLOYED_PARTIES" ]; then
     echo "Invalid --num-parties: $NUM_PARTIES (must be between $MIN_PARTIES and $DEPLOYED_PARTIES for threshold $THRESHOLD)" >&2
     usage
@@ -159,6 +187,7 @@ COORD_INSTANCE=$(get_output "$COORD_STACK" "$COORD_REGION" InstanceId)
 COORD_IMAGE=$(get_output "$COORD_STACK" "$COORD_REGION" ImageUri)
 COORD_LOG_GROUP=$(get_output "$COORD_STACK" "$COORD_REGION" LogGroupName)
 BUCKET=$(get_output "$COORD_STACK" "$COORD_REGION" ProgramsBucketName)
+AUTH_TOKEN="${STOFFEL_AUTH_TOKEN:-1}"
 
 if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
     echo "ERROR: could not resolve StoffelCoordinatorStack outputs in $COORD_REGION — has it been deployed?" >&2
@@ -257,7 +286,7 @@ print('\n'.join(lines))
 echo "Starting coordinator in $COORD_REGION..."
 COORD_SCRIPT=$(mktemp)
 build_coord_script "$N_INPUTS" "$STOFFEL_MPC_BACKEND" "$NUM_PARTIES" "$THRESHOLD" "$NODE_CERTS" \
-    "$COORD_LOG_GROUP" "$COORD_REGION" "coordinator/$RUN_ID" "$COORD_IMAGE" "${STOFFEL_AUTH_TOKEN:-}" \
+    "$COORD_LOG_GROUP" "$COORD_REGION" "coordinator/$RUN_ID" "$COORD_IMAGE" "$AUTH_TOKEN" \
     "$CONTAINER_NAME" "$(ping_snippet coord "$ADDR_BOOK")" > "$COORD_SCRIPT"
 COORD_CMD_ID=$(send_ssm "$COORD_REGION" "$COORD_INSTANCE" "$COORD_SCRIPT")
 rm -f "$COORD_SCRIPT"
@@ -266,14 +295,14 @@ echo "  started (command $COORD_CMD_ID)"
 
 # build_party_script <party-id> <bind-port> <rpc-port> <bucket> <program-basename> \
 #   <program-path> <n-inputs> <backend> <curve> <num-parties> <threshold> \
-#   <coord-addr> <bootstrap-addr-or-empty> <log-group> <region> <stream> \
+#   <coord-addr> <bootstrap-addr-or-empty> <advertise-ip> <log-group> <region> <stream> \
 #   <image> <auth-token> <container-name> <pings>
 build_party_script() {
     python3 -c "
 import sys
 (party_id, bind_port, rpc_port, bucket, base, path, n_inputs, backend, curve, num_parties,
- threshold, coord_addr, bootstrap_addr, log_group, region, stream, image, auth_token,
- container, pings) = sys.argv[1:21]
+ threshold, coord_addr, bootstrap_addr, advertise_ip, log_group, region, stream, image, auth_token,
+ container, pings) = sys.argv[1:22]
 
 env = {
     'STOFFEL_AUTH_TOKEN': auth_token,
@@ -293,6 +322,18 @@ env = {
     'STOFFEL_MPC_BACKEND': backend,
     'STOFFEL_MPC_CURVE': curve,
     'STOFFEL_COORD_ADDR': coord_addr,
+    # Each party is in its own region/VPC, reachable from the others only via
+    # its public Elastic IP (already resolved from CFN outputs) — without
+    # this, entrypoint.sh falls back to 'hostname -i' (the private VPC IP)
+    # for --advertise, which peers in other regions/VPCs can't route to.
+    'STOFFEL_ADVERTISE_IP': advertise_ip,
+    # Identity allowed to call `reset` on this node's RPC server, needed for
+    # --persistent-runs (not yet exposed by this script, but already
+    # supported by the StoffelVM image this deployment builds from). Without
+    # this, a node's RPC server defaults its designated party to its own
+    # cert, so party0 (which drives resets between persistent runs) can only
+    # reset itself and every other party rejects its reset calls.
+    'STOFFEL_NODE_RPC_DESIGNATED_PARTY_CERT': '/app/ids/pub/nodes/node0.crt',
 }
 if n_inputs:
     env['STOFFEL_CLIENT_INPUT_TOTAL'] = n_inputs
@@ -330,7 +371,8 @@ echo "Starting party0 in $(party_region 0)..."
 PARTY0_SCRIPT=$(mktemp)
 build_party_script "0" "9000" "16180" "$BUCKET" "$PROGRAM_BASENAME" "$PROGRAM_PATH" "$N_INPUTS" \
     "$STOFFEL_MPC_BACKEND" "$STOFFEL_MPC_CURVE" "$NUM_PARTIES" "$THRESHOLD" "$COORD_ADDR" "" \
-    "$LOG_GROUP_0" "$REGION_0" "party0/$RUN_ID" "$IMAGE_0" "${STOFFEL_AUTH_TOKEN:-}" "$CONTAINER_NAME" \
+    "$PARTY0_PUBLIC_IP" \
+    "$LOG_GROUP_0" "$REGION_0" "party0/$RUN_ID" "$IMAGE_0" "$AUTH_TOKEN" "$CONTAINER_NAME" \
     "$(ping_snippet node0 "$ADDR_BOOK")" > "$PARTY0_SCRIPT"
 PARTY0_CMD_ID=$(send_ssm "$REGION_0" "$INSTANCE_0" "$PARTY0_SCRIPT")
 rm -f "$PARTY0_SCRIPT"
@@ -360,10 +402,11 @@ if [ "$LAST_PARTY" -ge 1 ]; then
         eval "LOG_GROUP=\$LOG_GROUP_$IDX"
         BIND_PORT=$((9000 + IDX))
         RPC_PORT=$((16180 + IDX))
+        eval "PARTY_PUBLIC_IP=\$PUBLIC_IP_$IDX"
         SCRIPT=$(mktemp)
         build_party_script "$IDX" "$BIND_PORT" "$RPC_PORT" "$BUCKET" "$PROGRAM_BASENAME" "$PROGRAM_PATH" \
             "$N_INPUTS" "$STOFFEL_MPC_BACKEND" "$STOFFEL_MPC_CURVE" "$NUM_PARTIES" "$THRESHOLD" "$COORD_ADDR" \
-            "$BOOTSTRAP_ADDR" "$LOG_GROUP" "$REGION" "party${IDX}/$RUN_ID" "$IMAGE" "${STOFFEL_AUTH_TOKEN:-}" \
+            "$BOOTSTRAP_ADDR" "$PARTY_PUBLIC_IP" "$LOG_GROUP" "$REGION" "party${IDX}/$RUN_ID" "$IMAGE" "$AUTH_TOKEN" \
             "$CONTAINER_NAME" "$(ping_snippet "node${IDX}" "$ADDR_BOOK")" > "$SCRIPT"
         CMD_ID=$(send_ssm "$REGION" "$INSTANCE" "$SCRIPT")
         rm -f "$SCRIPT"

@@ -13,32 +13,35 @@ from aws_cdk import (
 )
 from constructs import Construct
 
-# ---------------------------------------------------------------------- #
-# Region assignment: one AWS region per party, plus a dedicated region   #
-# for the coordinator. Keep this in sync with regions — the shell        #
-# scripts (run-nodes, upload-program, ...) can't import this file, so    #
-# they carry their own copy of the same mapping.                        #
-# ---------------------------------------------------------------------- #
-COORD_REGION = "us-east-1"
-PARTY_REGIONS = [
-    "us-east-2",       # party0
-    "us-west-1",       # party1
-    "us-west-2",       # party2
-    "ca-central-1",    # party3
-    "eu-west-1",       # party4
-    "eu-west-2",       # party5
-    "eu-central-1",    # party6
-    "ap-southeast-1",  # party7
-    "ap-southeast-2",  # party8
-    "ap-northeast-1",  # party9
-]
-N_PARTIES = len(PARTY_REGIONS)
-THRESHOLD = 1
 
-# One constant to change instance size later (e.g. "c5.2xlarge" for real
-# benchmark runs) — cheap default for now since instances are persistent
+def _load_regions():
+    """
+    Region assignment: one AWS region per party, plus a dedicated region for
+    the coordinator. Read from regions.conf — the single source of truth also
+    used by the shell scripts (run-nodes, upload-program, ...), which can't
+    import this file directly.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "regions.conf")
+    values = {}
+    with open(path) as f:
+        for line in f:
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            key, _, value = line.partition("=")
+            values[key.strip()] = value.strip().strip('"')
+    return values["COORD_REGION"], values["PARTY_REGIONS"].split()
+
+
+COORD_REGION, PARTY_REGIONS = _load_regions()
+N_PARTIES = len(PARTY_REGIONS)
+DEFAULT_NUM_NODES = 4
+DEFAULT_THRESHOLD = 1
+
+# Constants to change instance sizes later — instances are persistent
 # (always-on) rather than billed per-run like the Fargate deployment.
-INSTANCE_TYPE = "t3.small"
+COORD_INSTANCE_TYPE = "t3.small"
+NODE_INSTANCE_TYPE = "c5.2xlarge"
 
 
 class StoffelCoordinatorStack(Stack):
@@ -62,7 +65,19 @@ class StoffelCoordinatorStack(Stack):
     and (re)start the container for each experiment, the same way the
     Fargate deployment calls `ecs run-task` for each run — the difference is
     the compute underneath is long-lived, so there's no per-run boot time,
-    but you pay for 11 running instances whether or not a run is active.
+    but you pay for every deployed instance whether or not a run is active —
+    which is why, unlike Fargate, num_nodes here directly controls how many
+    always-on instances get created, not just how many are used per run.
+
+    CDK context (pass via --context key=value):
+      num_nodes  - number of party regions (from regions.conf) to deploy
+                   persistent instances for (optional, default: 4)
+      threshold  - MPC threshold t (optional, default: 1); num_nodes must
+                   be >= 2t+1. Not baked into the instance — run-nodes still
+                   passes --threshold per experiment (see run-nodes); this
+                   context value only bounds num_nodes at deploy time.
+                   Keep run-nodes' DEPLOYED_PARTIES/THRESHOLD in sync with
+                   whatever num_nodes/threshold you deploy with.
     """
 
     def __init__(self, scope: Construct, construct_id: str, *, programs_bucket_name: str, **kwargs) -> None:
@@ -100,7 +115,7 @@ class StoffelCoordinatorStack(Stack):
 
         instance = ec2.Instance(
             self, "Instance",
-            instance_type=ec2.InstanceType(INSTANCE_TYPE),
+            instance_type=ec2.InstanceType(COORD_INSTANCE_TYPE),
             machine_image=ec2.MachineImage.latest_amazon_linux2023(),
             vpc=vpc,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
@@ -202,7 +217,7 @@ class StoffelPartyStack(Stack):
 
         instance = ec2.Instance(
             self, "Instance",
-            instance_type=ec2.InstanceType(INSTANCE_TYPE),
+            instance_type=ec2.InstanceType(NODE_INSTANCE_TYPE),
             machine_image=ec2.MachineImage.latest_amazon_linux2023(),
             vpc=vpc,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
@@ -241,13 +256,27 @@ if __name__ == "__main__":
     account = os.getenv("CDK_DEFAULT_ACCOUNT")
     programs_bucket_name = f"stoffel-ec2-cross-region-programs-{account}-{COORD_REGION}"
 
+    threshold_ctx = app.node.try_get_context("threshold")
+    threshold = DEFAULT_THRESHOLD if threshold_ctx is None else int(threshold_ctx)
+    if threshold < 1:
+        raise ValueError(f"threshold must be >= 1; got {threshold}")
+
+    num_nodes_ctx = app.node.try_get_context("num_nodes")
+    n_parties = DEFAULT_NUM_NODES if num_nodes_ctx is None else int(num_nodes_ctx)
+    min_parties = 2 * threshold + 1
+    if not (min_parties <= n_parties <= N_PARTIES):
+        raise ValueError(
+            f"num_nodes must be between {min_parties} and {N_PARTIES} "
+            f"(regions.conf lists {N_PARTIES} party regions) for threshold {threshold}; got {n_parties}"
+        )
+
     StoffelCoordinatorStack(
         app, "StoffelCoordinatorStack",
         programs_bucket_name=programs_bucket_name,
         env=cdk.Environment(account=account, region=COORD_REGION),
     )
 
-    for party_id, region in enumerate(PARTY_REGIONS):
+    for party_id, region in enumerate(PARTY_REGIONS[:n_parties]):
         StoffelPartyStack(
             app, f"StoffelParty{party_id}Stack",
             party_id=party_id,

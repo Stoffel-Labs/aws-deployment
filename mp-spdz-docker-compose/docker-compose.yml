@@ -1,0 +1,50 @@
+networks:
+  mpspdz:
+    driver: bridge
+
+# Common build + entrypoint config shared by all party containers.
+x-party: &party
+  build:
+    context: ../mp-spdz
+    dockerfile: ../mp-spdz-docker-compose/Dockerfile
+    additional_contexts:
+      - scripts=../mp-spdz-docker-compose
+  cap_add: [NET_ADMIN]
+  networks: [mpspdz]
+
+# Environment variables shared by all parties (see entrypoint.sh).
+x-common-env: &common-env
+  BIN: "shamir"
+  N_PARTIES: "3"
+  N_RUNS: "10"
+  EXTRA_FLAGS: ""
+  HOST: "party0"
+  PORT_BASE: "5000"
+  NET_LOSS: "${NET_LOSS:-}"
+  NET_BANDWIDTH: "${NET_BANDWIDTH:-}"
+  NET_DELAY: "${NET_DELAY:-}"
+
+services:
+  party0:
+    <<: *party
+    environment:
+      <<: *common-env
+      PARTY_ID: "0"
+
+  party1:
+    <<: *party
+    environment:
+      <<: *common-env
+      PARTY_ID: "1"
+    depends_on:
+      party0:
+        condition: service_started
+
+  party2:
+    <<: *party
+    environment:
+      <<: *common-env
+      PARTY_ID: "2"
+    depends_on:
+      party0:
+        condition: service_started

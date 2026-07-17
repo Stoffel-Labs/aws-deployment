@@ -36,7 +36,8 @@ def _load_regions():
 
 COORD_REGION, PARTY_REGIONS = _load_regions()
 N_PARTIES = len(PARTY_REGIONS)
-THRESHOLD = 1
+DEFAULT_NUM_NODES = 5
+DEFAULT_THRESHOLD = 1
 
 
 class StoffelCoordinatorStack(Stack):
@@ -56,9 +57,22 @@ class StoffelCoordinatorStack(Stack):
 
     CDK context (pass via --context key=value):
       auth_token - STOFFEL_AUTH_TOKEN (required)
+      num_nodes  - number of party regions (from regions.conf) to deploy
+                   stacks for (optional, default: 5)
+      threshold  - MPC threshold t (optional, default: 1); num_nodes must
+                   be >= 2t+1
     """
 
-    def __init__(self, scope: Construct, construct_id: str, *, programs_bucket_name: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        *,
+        programs_bucket_name: str,
+        n_parties: int,
+        threshold: int,
+        **kwargs,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         auth_token = self.node.try_get_context("auth_token") or ""
@@ -119,13 +133,13 @@ class StoffelCoordinatorStack(Stack):
                 "--hash", "0000000000000000000000000000000000000000000000000000000000000000",
                 "--server-cert", "/app/ids/pub/coord.crt",
                 "--server-key", "/app/ids/priv/coord.der",
-                "--n", str(N_PARTIES),
-                "--t", str(THRESHOLD),
+                "--n", str(n_parties),
+                "--t", str(threshold),
                 "--n-inputs", "0",
                 "--backend", "honeybadger",
                 "--output-clients", "/app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt",
                 "--initial-mpc-nodes",
-                ",".join(f"/app/ids/pub/nodes/node{i}.crt" for i in range(N_PARTIES)),
+                ",".join(f"/app/ids/pub/nodes/node{i}.crt" for i in range(n_parties)),
             ],
             # "run-coord" is a $0 placeholder so that "command" above lands in
             # "$@" starting at $1, letting the args be overridden as normal.
@@ -202,6 +216,8 @@ class StoffelPartyStack(Stack):
         *,
         party_id: int,
         programs_bucket_name: str,
+        n_parties: int,
+        threshold: int,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -251,8 +267,8 @@ class StoffelPartyStack(Stack):
 
         environment = {
             "STOFFEL_AUTH_TOKEN": auth_token,
-            "STOFFEL_N_PARTIES": str(N_PARTIES),
-            "STOFFEL_THRESHOLD": str(THRESHOLD),
+            "STOFFEL_N_PARTIES": str(n_parties),
+            "STOFFEL_THRESHOLD": str(threshold),
             "STOFFEL_ENTRY": "main",
             "RUST_LOG": "info",
             "RUST_BACKTRACE": "1",
@@ -386,17 +402,35 @@ if __name__ == "__main__":
     account = os.getenv("CDK_DEFAULT_ACCOUNT")
     programs_bucket_name = f"stoffel-cross-region-programs-{account}-{COORD_REGION}"
 
+    threshold_ctx = app.node.try_get_context("threshold")
+    threshold = DEFAULT_THRESHOLD if threshold_ctx is None else int(threshold_ctx)
+    if threshold < 1:
+        raise ValueError(f"threshold must be >= 1; got {threshold}")
+
+    num_nodes_ctx = app.node.try_get_context("num_nodes")
+    n_parties = DEFAULT_NUM_NODES if num_nodes_ctx is None else int(num_nodes_ctx)
+    min_parties = 2 * threshold + 1
+    if not (min_parties <= n_parties <= N_PARTIES):
+        raise ValueError(
+            f"num_nodes must be between {min_parties} and {N_PARTIES} "
+            f"(regions.conf lists {N_PARTIES} party regions) for threshold {threshold}; got {n_parties}"
+        )
+
     StoffelCoordinatorStack(
         app, "StoffelCoordinatorStack",
         programs_bucket_name=programs_bucket_name,
+        n_parties=n_parties,
+        threshold=threshold,
         env=cdk.Environment(account=account, region=COORD_REGION),
     )
 
-    for party_id, region in enumerate(PARTY_REGIONS):
+    for party_id, region in enumerate(PARTY_REGIONS[:n_parties]):
         StoffelPartyStack(
             app, f"StoffelParty{party_id}Stack",
             party_id=party_id,
             programs_bucket_name=programs_bucket_name,
+            n_parties=n_parties,
+            threshold=threshold,
             env=cdk.Environment(account=account, region=region),
         )
 

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Docker-compose equivalent of ../mp-spdz/sig_bench.sh: reproduces Table 1's
+# Sig(ms) column, but each party runs in its own container instead of as a
+# local background process.
+#
+# Usage: ./run-sig-bench <binary-prefix> <n_parties> <n_runs> [extra binary flags...]
+# Example (Rep3):     ./run-sig-bench rep 3 50
+# Example (MASCOT):   ./run-sig-bench mascot 2 50
+# Example (MASCOT-):  ./run-sig-bench mascot 2 50 -C -B
+#
+# Network impairment (matching the paper's LAN/continental-WAN/worldwide-WAN
+# settings: 0.08ms / 17ms / 240ms RTT) can be layered on with:
+#   NET_DELAY=17 ./run-sig-bench rep 3 50
+
+set -euo pipefail
+cd "$(dirname "$0")"
+
+BIN=${1:?Usage: $0 <binary-prefix> <n_parties> <n_runs> [extra flags...]}
+N=${2:?Usage: $0 <binary-prefix> <n_parties> <n_runs> [extra flags...]}
+RUNS=${3:?Usage: $0 <binary-prefix> <n_parties> <n_runs> [extra flags...]}
+shift 3
+EXTRA_FLAGS="$*"
+
+echo "Generating docker-compose.yml (binary=$BIN parties=$N runs=$RUNS flags='$EXTRA_FLAGS')..."
+./gen-docker-compose --binary "$BIN" --n-parties "$N" --n-runs "$RUNS" --extra-flags "$EXTRA_FLAGS"
+
+echo "Building and starting $N party container(s)..."
+docker compose up --build
+
+mkdir -p logs
+LOG_FILES=()
+for i in $(seq 0 $((N - 1))); do
+    f="logs/party${i}.log"
+    docker compose logs --no-log-prefix --no-color "party${i}" > "$f"
+    LOG_FILES+=("$f")
+done
+
+docker compose down --remove-orphans
+
+echo
+./collect-results "${LOG_FILES[@]}"

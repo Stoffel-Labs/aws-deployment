@@ -1,0 +1,48 @@
+#!/bin/sh
+# Poll a job's status every 5s, printing a message each time, until it
+# reaches a terminal state (SUCCEEDED or FAILED).
+# Usage: API_URL=... API_KEY=... ./wait-for-program <job_id>
+set -e
+
+usage() {
+    echo "Usage: API_URL=... API_KEY=... $0 <job_id>" >&2
+    exit 1
+}
+
+[ $# -lt 1 ] && usage
+JOB_ID="$1"
+
+if [ -z "$API_URL" ]; then
+    echo "ERROR: API_URL is not set." >&2
+    exit 1
+fi
+if [ -z "$API_KEY" ]; then
+    echo "ERROR: API_KEY is not set." >&2
+    exit 1
+fi
+API_URL="${API_URL%/}"
+
+while :; do
+    RESPONSE=$(curl -sf "$API_URL/jobs/$JOB_ID" -H "x-api-key: $API_KEY") || {
+        echo "ERROR: curl failed (exit $?) fetching status for $JOB_ID" >&2
+        exit 1
+    }
+    STATUS=$(echo "$RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status', ''))")
+    echo "Job $JOB_ID status: $STATUS"
+    case "$STATUS" in
+        SUCCEEDED|FAILED) break ;;
+        *) sleep 5 ;;
+    esac
+done
+
+echo ""
+echo "$RESPONSE" | python3 -m json.tool
+echo ""
+
+if [ "$STATUS" = "FAILED" ]; then
+    echo "Job $JOB_ID failed." >&2
+    exit 1
+fi
+
+echo "Job $JOB_ID succeeded."
+echo "Fetch logs with: ./get-logs $JOB_ID"

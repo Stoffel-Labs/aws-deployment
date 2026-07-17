@@ -1,0 +1,32 @@
+#!/bin/sh
+# Print the value of an API key. With no argument, prints this stack's
+# default key (see app.py's _add_api). With a username, prints the key
+# created for them via ./add-api-key.
+# Usage: API_KEY=$(./get-api-key [username])
+set -e
+
+STACK="StoffelUserDeploymentStack"
+USER="$1"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+if [ -z "$USER" ]; then
+    API_KEY_ID=$(get_output ApiKeyId)
+    if [ -z "$API_KEY_ID" ] || [ "$API_KEY_ID" = "None" ]; then
+        echo "ERROR: could not retrieve ApiKeyId from stack $STACK" >&2
+        exit 1
+    fi
+else
+    KEY_NAME="stoffel-$USER"
+    API_KEY_ID=$(aws apigateway get-api-keys --name-query "$KEY_NAME" --query "items[?name=='$KEY_NAME'].id" --output text)
+    if [ -z "$API_KEY_ID" ] || [ "$API_KEY_ID" = "None" ]; then
+        echo "ERROR: no API key named '$KEY_NAME' found" >&2
+        exit 1
+    fi
+fi
+
+aws apigateway get-api-key --api-key "$API_KEY_ID" --include-value --query value --output text

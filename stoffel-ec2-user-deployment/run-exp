@@ -1,0 +1,186 @@
+#!/bin/sh
+set -e
+
+PROGRAM="${1:?Usage: $0 <program-filename> [n-iterations]}"
+N_ITER="${2:-1}"
+N_NODES=5
+CSV="results.csv"
+CONTAINER_NAME="stoffel-run"
+
+# No bastion in this stack, so there's no way to check a party instance's
+# local disk from here before launching nodes - the program must already be
+# there (e.g. placed by a prior job submitted through the API, or a prior
+# ./run-nodes call). run-nodes/the party containers will fail at runtime if
+# it's missing.
+
+{
+    printf 'iter'
+    for j in $(seq 0 $((N_NODES - 1))); do
+        printf ',node%d_total,node%d_mem,node%d_pp,node%d_exec' "$j" "$j" "$j" "$j"
+    done
+    printf ',client_0,client_1'
+    printf ',round_preprocessing,round_input_mask_reservation,round_input_collection,round_mpc_execution,round_output_distribution'
+    printf '\n'
+} > "$CSV"
+
+# wait_container_stopped <instance-id> <label> - polls docker inspect via
+# SSM until the job's container is no longer "running" (i.e. has exited).
+wait_container_stopped() {
+    INSTANCE="$1"; LABEL="$2"
+    while :; do
+        PARAMS_FILE=$(mktemp)
+        python3 -c "
+import json
+print(json.dumps({
+    'DocumentName': 'AWS-RunShellScript',
+    'InstanceIds': ['$INSTANCE'],
+    'Parameters': {'commands': ['docker inspect --format \"{{.State.Status}}\" $CONTAINER_NAME 2>/dev/null || echo missing']},
+}))
+" > "$PARAMS_FILE"
+        CMD_ID=$(aws ssm send-command --cli-input-json "file://$PARAMS_FILE" --query 'Command.CommandId' --output text)
+        rm -f "$PARAMS_FILE"
+        sleep 2
+        STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+            --query 'StandardOutputContent' --output text 2>/dev/null | tr -d '\n')
+        case "$STATUS" in
+            exited|missing) return 0 ;;
+        esac
+        sleep 3
+    done
+    echo "  $LABEL stopped"
+}
+
+for i in $(seq 1 $N_ITER); do
+    echo "=== Iteration $i ==="
+
+    ./run-nodes "$PROGRAM"
+
+    CLIENT_START_TS=$(python3 -c "import time; print(int(time.time()*1000))")
+    { ./run-client 0 0 0; python3 -c "import time; print(int(time.time()*1000))" > "/tmp/client0_end_$$_$i"; } &
+    PID0=$!
+    { ./run-client 1 1 1; python3 -c "import time; print(int(time.time()*1000))" > "/tmp/client1_end_$$_$i"; } &
+    PID1=$!
+    wait $PID0
+    wait $PID1
+
+    . ./log-env.sh
+
+    echo "Waiting for party containers to stop..."
+    for j in $ACTIVE_PARTIES; do
+        eval "INSTANCE=\$PARTY${j}_INSTANCE"
+        wait_container_stopped "$INSTANCE" "party$j"
+    done
+
+    row="$i"
+    for j in $(seq 0 $((N_NODES - 1))); do
+        eval "STREAM=\$PARTY${j}_LOG_STREAM"
+
+        FIRST_TS=$(aws logs get-log-events \
+            --log-group-name "$LOG_GROUP" \
+            --log-stream-name "$STREAM" \
+            --start-from-head \
+            --limit 1 \
+            --query 'events[0].timestamp' \
+            --output text)
+
+        LAST_TS=$(aws logs get-log-events \
+            --log-group-name "$LOG_GROUP" \
+            --log-stream-name "$STREAM" \
+            --limit 1 \
+            --query 'events[0].timestamp' \
+            --output text)
+
+        if [ "$FIRST_TS" = "None" ] || [ "$LAST_TS" = "None" ]; then
+            DURATION="N/A"
+            MEM="N/A"
+            PP="N/A"
+            EXEC="N/A"
+        else
+            DURATION=$(python3 -c "print(f'{($LAST_TS - $FIRST_TS) / 1000.0:.3f}')")
+
+            MEM_LINE=$(aws logs filter-log-events \
+                --log-group-name "$LOG_GROUP" \
+                --log-stream-names "$STREAM" \
+                --filter-pattern '"PEAK_MEM_BYTES"' \
+                --start-time "$FIRST_TS" \
+                --end-time "$((LAST_TS + 60000))" \
+                --query 'events[-1].message' \
+                --output text 2>/dev/null)
+            MEM=$(echo "$MEM_LINE" | python3 -c "
+import sys, re
+m = re.search(r'PEAK_MEM_BYTES: (\d+)', sys.stdin.read())
+print(f'{int(m.group(1)) / 1024 / 1024:.1f}' if m else 'N/A')
+")
+
+            PP_LINE=$(aws logs filter-log-events \
+                --log-group-name "$LOG_GROUP" \
+                --log-stream-names "$STREAM" \
+                --filter-pattern '"BENCH_PP_SECS"' \
+                --start-time "$FIRST_TS" \
+                --end-time "$((LAST_TS + 60000))" \
+                --query 'events[-1].message' \
+                --output text 2>/dev/null)
+            PP=$(echo "$PP_LINE" | python3 -c "
+import sys, re
+m = re.search(r'BENCH_PP_SECS: (\S+)', sys.stdin.read())
+print(m.group(1) if m else 'N/A')
+")
+
+            EXEC_LINE=$(aws logs filter-log-events \
+                --log-group-name "$LOG_GROUP" \
+                --log-stream-names "$STREAM" \
+                --filter-pattern '"BENCH_EXEC_SECS"' \
+                --start-time "$FIRST_TS" \
+                --end-time "$((LAST_TS + 60000))" \
+                --query 'events[-1].message' \
+                --output text 2>/dev/null)
+            EXEC=$(echo "$EXEC_LINE" | python3 -c "
+import sys, re
+m = re.search(r'BENCH_EXEC_SECS: (\S+)', sys.stdin.read())
+print(m.group(1) if m else 'N/A')
+")
+        fi
+
+        row="$row,$DURATION,$MEM,$PP,$EXEC"
+    done
+
+    CLIENT0_END_TS=$(cat "/tmp/client0_end_$$_$i")
+    CLIENT1_END_TS=$(cat "/tmp/client1_end_$$_$i")
+    CLIENT0_DURATION=$(python3 -c "print(f'{($CLIENT0_END_TS - $CLIENT_START_TS) / 1000.0:.3f}')")
+    CLIENT1_DURATION=$(python3 -c "print(f'{($CLIENT1_END_TS - $CLIENT_START_TS) / 1000.0:.3f}')")
+    row="$row,$CLIENT0_DURATION,$CLIENT1_DURATION"
+
+    ROUND_TIMES="N/A,N/A,N/A,N/A,N/A"
+    if [ -n "${COORD_LOG_STREAM:-}" ]; then
+        ROUND_MSGS=$(aws logs filter-log-events \
+            --log-group-name "$LOG_GROUP" \
+            --log-stream-names "$COORD_LOG_STREAM" \
+            --filter-pattern '"BENCH_ROUND"' \
+            --query 'events[*].message' \
+            --output json 2>/dev/null)
+        ROUND_TIMES=$(echo "$ROUND_MSGS" | python3 -c "
+import sys, re, json
+rounds = ['Preprocessing', 'InputMaskReservation', 'InputCollection', 'MPCExecution', 'OutputDistribution', 'ProgramFinished']
+try:
+    messages = json.load(sys.stdin)
+except Exception:
+    messages = []
+ts = {}
+for msg in messages:
+    m = re.search(r'BENCH_ROUND: (\w+) ts=(\d+)', msg)
+    if m:
+        ts[m.group(1)] = int(m.group(2))
+results = []
+for i in range(len(rounds) - 1):
+    t0, t1 = ts.get(rounds[i]), ts.get(rounds[i+1])
+    results.append(f'{(t1-t0)/1000.0:.3f}' if t0 is not None and t1 is not None else 'N/A')
+print(','.join(results))
+")
+    fi
+    row="$row,$ROUND_TIMES"
+
+    echo "$row" >> "$CSV"
+    echo "  -> $row"
+done
+
+echo "Results written to $CSV"

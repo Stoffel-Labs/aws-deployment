@@ -1,13 +1,12 @@
 #!/bin/sh
 # Region assignment shared by run-nodes, upload-program, run-client, run-exp,
-# get-aws-logs, and cleanup-tasks. Must be kept in sync with COORD_REGION /
-# PARTY_REGIONS in app.py — the shell scripts can't import that file.
+# get-aws-logs, and cleanup-tasks. Values live in regions.conf — this just
+# loads that file and provides the party_region() lookup helper.
 #
 # /bin/sh has no arrays, so PARTY_REGIONS is a space-separated list; index it
 # with: set -- $PARTY_REGIONS; eval "REGION=\${$((i + 1))}"
 
-COORD_REGION="us-east-1"
-PARTY_REGIONS="us-east-2 us-west-1 us-west-2 ca-central-1 eu-west-1 eu-west-2 eu-central-1 ap-southeast-1 ap-southeast-2 ap-northeast-1"
+. "$(dirname "$0")/regions.conf"
 
 # party_region <index> — echoes the region for party <index> (0-based).
 party_region() {

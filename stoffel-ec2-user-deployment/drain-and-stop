@@ -1,0 +1,98 @@
+#!/bin/sh
+# Emergency stop: purge every queued job and forcibly stop whatever is
+# currently running. This affects ALL users' pending/in-flight jobs, not
+# just your own - the queue, cluster, and lock are shared.
+#
+# Stopping the Step Functions execution alone is not enough: it drives
+# SSM Run Command from StartJob/CheckJobStatus/FinishJob, invisible to Step
+# Functions' own stop-execution call, which does not reach into an
+# in-progress SSM command or the container it started. So this removes the
+# containers directly (docker rm -f on every deployed instance), and
+# separately releases the DynamoDB lock, since nothing else does that on an
+# aborted run - without it every future queued job stays blocked forever.
+#
+# Usage: ./drain-and-stop
+set -e
+
+STACK="StoffelEc2UserDeploymentStack"
+CONTAINER_NAME="stoffel-run"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+QUEUE_URL=$(get_output JobsQueueUrl)
+STATE_MACHINE_ARN=$(get_output StateMachineArn)
+JOBS_TABLE=$(get_output JobsTableName)
+DEPLOYED_PARTIES=$(get_output DeployedParties)
+COORD_INSTANCE=$(get_output CoordInstanceId)
+LOCK_TABLE=$(aws cloudformation describe-stack-resources --stack-name "$STACK" \
+    --query "StackResources[?ResourceType=='AWS::DynamoDB::Table' && contains(LogicalResourceId, 'LockTable')].PhysicalResourceId" \
+    --output text)
+
+echo "Purging queue..."
+aws sqs purge-queue --queue-url "$QUEUE_URL"
+
+echo "Stopping running Step Functions executions..."
+for EXEC_ARN in $(aws stepfunctions list-executions --state-machine-arn "$STATE_MACHINE_ARN" \
+        --status-filter RUNNING --query 'executions[*].executionArn' --output text); do
+    echo "  stopping $EXEC_ARN"
+    aws stepfunctions stop-execution --execution-arn "$EXEC_ARN" --cause "manual drain-and-stop" >/dev/null
+done
+
+echo "Removing containers on every node instance..."
+remove_container() {
+    LABEL="$1"; INSTANCE="$2"
+    PARAMS_FILE=$(mktemp)
+    python3 -c "
+import json, sys
+instance, container = sys.argv[1:3]
+print(json.dumps({
+    'DocumentName': 'AWS-RunShellScript',
+    'InstanceIds': [instance],
+    'Parameters': {'commands': [f'docker rm -f {container} >/dev/null 2>&1 || true']},
+}))
+" "$INSTANCE" "$CONTAINER_NAME" > "$PARAMS_FILE"
+    if aws ssm send-command --cli-input-json "file://$PARAMS_FILE" >/dev/null 2>&1; then
+        echo "  $LABEL ($INSTANCE): stop command sent"
+    else
+        echo "  $LABEL ($INSTANCE): could not send SSM command (instance may not be registered)"
+    fi
+    rm -f "$PARAMS_FILE"
+}
+
+remove_container coordinator "$COORD_INSTANCE"
+IDX=0
+LAST_PARTY=$((DEPLOYED_PARTIES - 1))
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    INSTANCE=$(get_output "Party${IDX}InstanceId")
+    remove_container "party${IDX}" "$INSTANCE"
+    IDX=$((IDX + 1))
+done
+
+echo "Releasing the job lock..."
+aws dynamodb delete-item --table-name "$LOCK_TABLE" --key '{"lock_id": {"S": "jobs"}}'
+
+echo "Marking in-flight job records..."
+NOW=$(python3 -c "import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())")
+aws dynamodb scan --table-name "$JOBS_TABLE" \
+    --filter-expression "#s IN (:queued, :running)" \
+    --expression-attribute-names '{"#s":"status"}' \
+    --expression-attribute-values '{":queued":{"S":"QUEUED"},":running":{"S":"RUNNING"}}' \
+    --query 'Items[*].[job_id.S,status.S]' --output text |
+while read -r JOB_ID OLD_STATUS; do
+    [ -z "$JOB_ID" ] && continue
+    NEW_STATUS="FAILED"
+    [ "$OLD_STATUS" = "QUEUED" ] && NEW_STATUS="CANCELLED"
+    echo "  $JOB_ID: $OLD_STATUS -> $NEW_STATUS"
+    aws dynamodb update-item --table-name "$JOBS_TABLE" \
+        --key "{\"job_id\": {\"S\": \"$JOB_ID\"}}" \
+        --update-expression "SET #s = :s, finished_at = :f, #e = :err" \
+        --expression-attribute-names '{"#s":"status","#e":"error"}' \
+        --expression-attribute-values "{\":s\":{\"S\":\"$NEW_STATUS\"},\":f\":{\"S\":\"$NOW\"},\":err\":{\"S\":\"manually stopped via drain-and-stop\"}}" \
+        >/dev/null
+done
+
+echo "Done."

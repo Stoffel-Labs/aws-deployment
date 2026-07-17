@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Compute Table 1's Sig(ms), plus secret/public key generation time, from
+party container logs.
+
+Usage: ./collect-results <party0.log> <party1.log> ... <partyN-1.log>
+
+Each log is expected to contain N_RUNS blocks delimited by "===RUN i===",
+one per single-signature benchmark (see entrypoint.sh / ECDSA/sign.hpp's
+sign_benchmark loop with n_tuples=1). For each run and each metric below,
+takes the max across parties (protocols have asymmetric comm patterns, per
+the paper's Table 1 methodology), then averages that max over all runs:
+
+  - Sig(ms): sum of each party's "Generated 1 tuples...", "Minimal
+    signing...", and "Online checking..." time.
+  - Secret key generation(ms): from "Secret key generation took ..."
+    (ECDSA/hm-ecdsa-party.hpp / ECDSA/ot-ecdsa-party.hpp).
+  - Public key generation(ms): from "Public key generation took ..."
+    (ECDSA/sign.hpp's sign_benchmark).
+"""
+
+import re
+import sys
+
+RUN_RE = re.compile(r"===RUN (\d+)===")
+GEN_RE = re.compile(r"Generated 1 tuples in ([\d.eE+-]+) seconds")
+SIGN_RE = re.compile(r"Minimal signing took ([\d.eE+-]+) ms")
+CHECK_RE = re.compile(r"Online checking took ([\d.eE+-]+) ms")
+SK_RE = re.compile(r"Secret key generation took ([\d.eE+-]+) ms")
+PK_RE = re.compile(r"Public key generation took ([\d.eE+-]+) ms")
+
+
+def parse_log(path):
+    """Return {run_index: {"sig": ms, "sk": ms, "pk": ms}} for one party's log."""
+    runs = {}
+    current = None
+    buf = []
+    with open(path) as f:
+        lines = f.readlines()
+
+    def flush():
+        if current is None:
+            return
+        text = "".join(buf)
+        gen = GEN_RE.search(text)
+        sign = SIGN_RE.search(text)
+        check = CHECK_RE.search(text)
+        sk = SK_RE.search(text)
+        pk = PK_RE.search(text)
+        total = 0.0
+        if gen:
+            total += float(gen.group(1)) * 1000
+        if sign:
+            total += float(sign.group(1))
+        if check:
+            total += float(check.group(1))
+        runs[current] = {
+            "sig": total,
+            "sk": float(sk.group(1)) if sk else None,
+            "pk": float(pk.group(1)) if pk else None,
+        }
+
+    for line in lines:
+        m = RUN_RE.search(line)
+        if m:
+            flush()
+            current = int(m.group(1))
+            buf = []
+        else:
+            buf.append(line)
+    flush()
+    return runs
+
+
+def report(label, all_runs, per_party):
+    """Print mean/min/max of the per-run max-across-parties for one metric."""
+    maxima = []
+    for run in all_runs:
+        totals = [p[run][label] for p in per_party
+                  if run in p and p[run][label] is not None]
+        if len(totals) < len(per_party):
+            print(f"WARNING: run {run} missing '{label}' data from "
+                  f"{len(per_party) - len(totals)} part(y/ies), skipping",
+                  file=sys.stderr)
+            continue
+        maxima.append(max(totals))
+
+    if not maxima:
+        print(f"No complete runs (all parties reporting) found for '{label}'.",
+              file=sys.stderr)
+        return
+
+    mean = sum(maxima) / len(maxima)
+    names = {"sig": "Sig(ms)", "sk": "Secret key generation(ms)",
+              "pk": "Public key generation(ms)"}
+    print(f"{names[label]} over {len(maxima)} runs: mean = {mean:.4f} ms")
+    print(f"  (min={min(maxima):.4f} ms, max={max(maxima):.4f} ms)")
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__, file=sys.stderr)
+        sys.exit(1)
+
+    per_party = [parse_log(p) for p in sys.argv[1:]]
+    all_runs = sorted(set().union(*[p.keys() for p in per_party]))
+
+    if not all_runs:
+        print("No runs found in logs (no '===RUN i===' markers matched).",
+              file=sys.stderr)
+        sys.exit(1)
+
+    report("sig", all_runs, per_party)
+    report("sk", all_runs, per_party)
+    report("pk", all_runs, per_party)
+
+
+if __name__ == "__main__":
+    main()

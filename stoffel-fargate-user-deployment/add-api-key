@@ -1,0 +1,43 @@
+#!/bin/sh
+# Create a new API key for a user and attach it to this stack's usage plan.
+# Does NOT need `cdk deploy` - the usage plan is already live; this just adds
+# a key to it directly via the AWS CLI (see app.py's _add_api and README's
+# "Onboarding additional users").
+# Usage: ./add-api-key <username>
+set -e
+
+STACK="StoffelUserDeploymentStack"
+USER="$1"
+
+if [ -z "$USER" ]; then
+    echo "Usage: $0 <username>" >&2
+    exit 1
+fi
+
+KEY_NAME="stoffel-$USER"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+USAGE_PLAN_ID=$(get_output UsagePlanId)
+
+if [ -z "$USAGE_PLAN_ID" ] || [ "$USAGE_PLAN_ID" = "None" ]; then
+    echo "ERROR: could not retrieve UsagePlanId from stack $STACK" >&2
+    exit 1
+fi
+
+EXISTING=$(aws apigateway get-api-keys --name-query "$KEY_NAME" --query "items[?name=='$KEY_NAME'].id" --output text)
+if [ -n "$EXISTING" ] && [ "$EXISTING" != "None" ]; then
+    echo "ERROR: an API key named '$KEY_NAME' already exists (id: $EXISTING)" >&2
+    exit 1
+fi
+
+KEY_ID=$(aws apigateway create-api-key --name "$KEY_NAME" --enabled --query id --output text)
+aws apigateway create-usage-plan-key --usage-plan-id "$USAGE_PLAN_ID" \
+    --key-id "$KEY_ID" --key-type API_KEY >/dev/null
+
+echo "Created API key '$KEY_NAME' (id: $KEY_ID), attached to usage plan $USAGE_PLAN_ID" >&2
+aws apigateway get-api-key --api-key "$KEY_ID" --include-value --query value --output text

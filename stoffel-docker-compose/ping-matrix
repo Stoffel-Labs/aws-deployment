@@ -11,10 +11,12 @@ set -e
 
 usage() {
     echo "Usage: $0 [output-csv]" >&2
-    echo "  Waits for the coordinator and all party containers to stop, then" >&2
+    echo "  Waits for all party containers to stop (the coordinator keeps" >&2
+    echo "  running, so it isn't waited on), then" >&2
     echo "  aggregates each container's full-mesh ping output into an RTT matrix," >&2
     echo "  written as CSV. Row/column 0 is the coordinator, row/column i+1 is" >&2
-    echo "  node i. (default output: ping-matrix.csv)" >&2
+    echo "  node i. Also reports min/max/average RTT across all inter-party" >&2
+    echo "  pairs. (default output: ping-matrix.csv)" >&2
     exit 1
 }
 
@@ -37,14 +39,16 @@ while [ "$IDX" -le 9 ]; do
 done
 
 echo "Waiting for all node containers to stop (so ping output is complete)..."
-# "compose wait" only knows about containers Compose still considers current
-# (i.e. still running when invoked) — if a container already exited before
-# we get here, wait can't attach to it and fails with "no containers for
-# project ...". Only wait on services that are still running; anything
-# already stopped is, by definition, done.
+# The coordinator keeps running after its pings finish, so it never stops on
+# its own; only wait on the party containers. "compose wait" only knows about
+# containers Compose still considers current (i.e. still running when
+# invoked) — if a container already exited before we get here, wait can't
+# attach to it and fails with "no containers for project ...". Only wait on
+# services that are still running; anything already stopped is, by
+# definition, done.
 RUNNING=$($COMPOSE ps --status=running --services 2>/dev/null)
 TO_WAIT=""
-for SVC in coordinator $ACTIVE_PARTIES; do
+for SVC in $ACTIVE_PARTIES; do
     if echo "$RUNNING" | grep -qx "$SVC"; then
         TO_WAIT="$TO_WAIT $SVC"
     fi
@@ -134,6 +138,15 @@ with open(sys.argv[1], 'w', newline='') as f:
     writer = csv.writer(f)
     for i in range(len(entities)):
         writer.writerow([cell(i, j) for j in range(len(entities))])
+    # Exclude the coordinator (row/column 0) so min/max/avg reflect only
+    # inter-party RTTs, not party<->coordinator RTTs.
+    values = [rtt for (src, tgt), rtt in rtts.items() if src != 'coord' and tgt != 'coord']
+    writer.writerow([])
+    writer.writerow(['min', f'{min(values):.3f}' if values else ''])
+    writer.writerow(['max', f'{max(values):.3f}' if values else ''])
+    writer.writerow(['average', f'{sum(values) / len(values):.3f}' if values else ''])
 
 print(f'Wrote {len(entities)}x{len(entities)} RTT matrix to {sys.argv[1]}')
+if values:
+    print(f'RTT across nodes: min: {min(values):.3f}ms  max: {max(values):.3f}ms  avg: {sum(values) / len(values):.3f}ms  (n={len(values)})')
 " "$OUT_CSV" "$RAW"

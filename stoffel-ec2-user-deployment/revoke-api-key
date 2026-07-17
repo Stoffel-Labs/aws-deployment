@@ -1,0 +1,24 @@
+#!/bin/sh
+# Revoke (delete) a user's API key. Does NOT need `cdk deploy` - deletes it
+# directly via the AWS CLI. Immediately invalidates the key.
+# Usage: ./revoke-api-key <username>
+set -e
+
+USER="$1"
+
+if [ -z "$USER" ]; then
+    echo "Usage: $0 <username>" >&2
+    exit 1
+fi
+
+KEY_NAME="stoffel-$USER"
+
+KEY_ID=$(aws apigateway get-api-keys --name-query "$KEY_NAME" --query "items[?name=='$KEY_NAME'].id" --output text)
+
+if [ -z "$KEY_ID" ] || [ "$KEY_ID" = "None" ]; then
+    echo "ERROR: no API key named '$KEY_NAME' found" >&2
+    exit 1
+fi
+
+aws apigateway delete-api-key --api-key "$KEY_ID"
+echo "Revoked API key '$KEY_NAME' (id: $KEY_ID)" >&2

@@ -1,0 +1,55 @@
+#!/bin/sh
+set -e
+
+# Stops the coordinator + every party EC2 instance to avoid paying for
+# compute while the cluster is idle (e.g. overnight). Safe with this
+# deployment specifically: Elastic IPs stay bound to a stopped instance in a
+# VPC, and root EBS volumes (with Docker already installed) persist — so
+# run-nodes' baked-in peer address book and each instance's setup are both
+# unaffected by a stop/start cycle. This only stops compute (instance-hour)
+# billing; EBS storage and Elastic IP address charges keep accruing
+# regardless of instance state.
+#
+# Must match run-nodes' DEPLOYED_PARTIES (keep in sync with whatever
+# num_nodes was actually deployed via `cdk deploy --context num_nodes=<n>`).
+DEPLOYED_PARTIES=5
+
+. "$(dirname "$0")/regions"
+
+get_output() {
+    # get_output <stack> <region> <output-key>
+    aws cloudformation describe-stacks --stack-name "$1" --region "$2" \
+        --query "Stacks[0].Outputs[?OutputKey=='$3'].OutputValue" \
+        --output text
+}
+
+stop_instance() {
+    REGION="$1"; INSTANCE="$2"; LABEL="$3"
+    echo "Stopping $LABEL ($INSTANCE in $REGION)..."
+    aws ec2 stop-instances --region "$REGION" --instance-ids "$INSTANCE" >/dev/null
+}
+
+COORD_INSTANCE=$(get_output "StoffelCoordinatorStack" "$COORD_REGION" InstanceId)
+if [ -z "$COORD_INSTANCE" ] || [ "$COORD_INSTANCE" = "None" ]; then
+    echo "ERROR: could not resolve StoffelCoordinatorStack InstanceId in $COORD_REGION — has it been deployed?" >&2
+    exit 1
+fi
+stop_instance "$COORD_REGION" "$COORD_INSTANCE" "coordinator"
+
+LAST_PARTY=$((DEPLOYED_PARTIES - 1))
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    REGION=$(party_region "$IDX")
+    STACK="StoffelParty${IDX}Stack"
+    INSTANCE=$(get_output "$STACK" "$REGION" InstanceId)
+    if [ -z "$INSTANCE" ] || [ "$INSTANCE" = "None" ]; then
+        echo "ERROR: could not resolve $STACK InstanceId in $REGION — has it been deployed?" >&2
+        exit 1
+    fi
+    stop_instance "$REGION" "$INSTANCE" "party${IDX}"
+    IDX=$((IDX + 1))
+done
+
+echo ""
+echo "Stop requests sent for all $((DEPLOYED_PARTIES + 1)) instances (they take a minute or two to fully stop)."
+echo "Run ./start-nodes when you're ready to use the cluster again."

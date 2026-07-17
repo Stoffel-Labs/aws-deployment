@@ -1,0 +1,185 @@
+#!/bin/sh
+set -e
+
+usage() {
+    echo "Usage: $0 [log-env-file] [output-csv]" >&2
+    echo "  Reads instance/log info from log-env.sh (written by ./run-nodes) and" >&2
+    echo "  aggregates each container's full-mesh ping output into an RTT matrix," >&2
+    echo "  written as CSV. Row/column 0 is the coordinator, row/column i+1 is" >&2
+    echo "  node i. (default log-env-file: log-env.sh, default output: ping-matrix.csv)" >&2
+    exit 1
+}
+
+case "$1" in -h|--help) usage ;; esac
+
+LOG_ENV="${1:-log-env.sh}"
+OUT_CSV="${2:-ping-matrix.csv}"
+
+[ -f "$LOG_ENV" ] || { echo "ERROR: $LOG_ENV not found. Run ./run-nodes first." >&2; exit 1; }
+. "$LOG_ENV"
+
+[ -n "$LOG_GROUP" ] || { echo "ERROR: LOG_GROUP not set in $LOG_ENV" >&2; exit 1; }
+
+CONTAINER_NAME="stoffel-run"
+
+# wait_for_container <instance> - runs `docker wait` on the instance via
+# SSM, which blocks server-side until the container exits, then polls the
+# SSM command itself to completion. Every party's entry_point pings every
+# peer right before it exits (addresses were known before the node ever
+# started - see run-nodes), so once the container has stopped, every ping
+# line it's going to write is already in CloudWatch. Only called for party
+# containers, not the coordinator's - see the note where it's invoked.
+wait_for_container() {
+    INSTANCE="$1"
+    PARAMS_FILE=$(mktemp)
+    python3 -c "
+import json, sys
+instance, container = sys.argv[1:3]
+print(json.dumps({
+    'DocumentName': 'AWS-RunShellScript',
+    'InstanceIds': [instance],
+    'Parameters': {'commands': [f'docker wait {container} >/dev/null 2>&1 || true']},
+}))
+" "$INSTANCE" "$CONTAINER_NAME" > "$PARAMS_FILE"
+    CMD_ID=$(aws ssm send-command --cli-input-json "file://$PARAMS_FILE" \
+        --query 'Command.CommandId' --output text)
+    rm -f "$PARAMS_FILE"
+
+    ELAPSED=0
+    while :; do
+        STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+            --query 'Status' --output text 2>/dev/null || echo "Pending")
+        case "$STATUS" in
+            Success) return 0 ;;
+            Cancelled|TimedOut|Failed|Cancelling)
+                echo "WARNING: docker wait command ended as $STATUS on $INSTANCE" >&2
+                return 0
+                ;;
+        esac
+        # `docker wait` can legitimately block for as long as the whole MPC
+        # run takes, so this has no short timeout - cap at 2h as a backstop.
+        if [ "$ELAPSED" -ge 7200 ]; then
+            echo "WARNING: still waiting on $INSTANCE after 2h, giving up" >&2
+            return 0
+        fi
+        sleep 5
+        ELAPSED=$((ELAPSED + 5))
+    done
+}
+
+echo "Waiting for all party containers to stop (so ping output is complete)..."
+# The coordinator's container is intentionally excluded here: run-coord is a
+# long-lived server that keeps running after logging "ProgramFinished" (it
+# doesn't exit per-run the way party containers do), so `docker wait` on it
+# would just block until the 2h backstop above. Every party already pings
+# the coordinator, and the matrix builder falls back to that reverse
+# reading for the coord column/row, so there's no need to wait on it here.
+WAIT_PIDS=""
+for IDX in $ACTIVE_PARTIES; do
+    eval "INSTANCE=\$PARTY${IDX}_INSTANCE"
+    if [ -n "$INSTANCE" ]; then
+        wait_for_container "$INSTANCE" &
+        WAIT_PIDS="$WAIT_PIDS $!"
+    fi
+done
+for PID in $WAIT_PIDS; do
+    wait "$PID"
+done
+
+RAW=$(mktemp)
+trap 'rm -f "$RAW"' EXIT
+
+# Pull every log line from a stream (paginating through get-log-events) and
+# tag each one with the entity name it came from, e.g. "coord\t<message>".
+fetch_stream() {
+    LABEL="$1"
+    STREAM="$2"
+    TOKEN=""
+    while :; do
+        if [ -z "$TOKEN" ]; then
+            PAGE=$(aws logs get-log-events --log-group-name "$LOG_GROUP" --log-stream-name "$STREAM" \
+                --start-from-head --limit 10000 --output json)
+        else
+            PAGE=$(aws logs get-log-events --log-group-name "$LOG_GROUP" --log-stream-name "$STREAM" \
+                --start-from-head --limit 10000 --next-token "$TOKEN" --output json)
+        fi
+        echo "$PAGE" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for e in data['events']:
+    print('$LABEL\t' + e['message'])
+" >> "$RAW"
+        NEXT=$(echo "$PAGE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('nextForwardToken',''))")
+        COUNT=$(echo "$PAGE" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['events']))")
+        [ "$COUNT" = "0" ] && break
+        [ "$NEXT" = "$TOKEN" ] && break
+        TOKEN="$NEXT"
+    done
+}
+
+echo "Fetching ping log lines..."
+echo "  coordinator..."
+fetch_stream "coord" "$COORD_LOG_STREAM"
+
+for IDX in $ACTIVE_PARTIES; do
+    eval "STREAM=\$PARTY${IDX}_LOG_STREAM"
+    if [ -n "$STREAM" ]; then
+        echo "  node${IDX}..."
+        fetch_stream "node${IDX}" "$STREAM"
+    fi
+done
+
+python3 -c "
+import csv, re, sys
+
+entries = []  # (source, message)
+with open(sys.argv[2]) as f:
+    for line in f:
+        source, _, message = line.rstrip('\n').partition('\t')
+        if source:
+            entries.append((source, message))
+
+node_indices = sorted(
+    {int(m.group(1)) for src, _ in entries if (m := re.fullmatch(r'node(\d+)', src))}
+)
+entities = ['coord'] + [f'node{i}' for i in node_indices]
+
+# Each container's entry_point echoes 'Pinging <name>...' using the same
+# 'coord'/'nodeN' names it read from the address book run-nodes baked into
+# its docker run command, so no name mapping is needed.
+def normalize_target(target):
+    return target if target == 'coord' or re.fullmatch(r'node\d+', target) else None
+
+rtts = {}  # (source, target) -> rtt ms
+pending_target = None
+for source, message in entries:
+    m = re.match(r'Pinging (.+)\.\.\.\$', message)
+    if m:
+        pending_target = normalize_target(m.group(1))
+        continue
+    m = re.search(r'rtt min/avg/max/mdev = [\d.]+/([\d.]+)/[\d.]+/[\d.]+ ms', message)
+    if m and pending_target:
+        rtts[(source, pending_target)] = float(m.group(1))
+        pending_target = None
+
+def cell(i, j):
+    if i == j:
+        return ''
+    rtt = rtts.get((entities[i], entities[j]))
+    return f'{rtt:.3f}' if rtt is not None else ''
+
+with open(sys.argv[1], 'w', newline='') as f:
+    writer = csv.writer(f)
+    writer.writerow(entities)
+    for i in range(len(entities)):
+        writer.writerow([cell(i, j) for j in range(len(entities))])
+    # Exclude the coordinator (row/column 0) so min/max/avg reflect only
+    # inter-party RTTs, not party<->coordinator RTTs.
+    values = [rtt for (src, tgt), rtt in rtts.items() if src != 'coord' and tgt != 'coord']
+    writer.writerow([])
+    writer.writerow(['min', f'{min(values):.3f}' if values else ''])
+    writer.writerow(['max', f'{max(values):.3f}' if values else ''])
+    writer.writerow(['average', f'{sum(values) / len(values):.3f}' if values else ''])
+
+print(f'Wrote {len(entities)}x{len(entities)} RTT matrix to {sys.argv[1]}')
+" "$OUT_CSV" "$RAW"

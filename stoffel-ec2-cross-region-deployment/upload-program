@@ -1,5 +1,6 @@
 #!/bin/sh
-# Upload a compiled program to the shared S3 bucket that every party region
+# Upload a compiled program from the repo-root ./programs/ (built by
+# ../build-programs) to the shared S3 bucket that every party region
 # downloads from at run-nodes time (replaces the bastion/EFS scp flow used
 # by stoffel-fargate-deployment — S3 is reachable from every region).
 set -e
@@ -7,13 +8,24 @@ set -e
 . "$(dirname "$0")/regions"
 
 usage() {
-    echo "Usage: $0 <local-program>" >&2
-    echo "  e.g.: $0 client_mul.stflb" >&2
+    echo "Usage: $0 <program-name>" >&2
+    echo "  e.g.: $0 client_mul          (looks for ../programs/client_mul.stflb)" >&2
+    echo "        $0 client_mul.stflb" >&2
     exit 1
 }
 
-LOCAL_FILE="${1:?$(usage)}"
-[ -f "$LOCAL_FILE" ] || { echo "ERROR: $LOCAL_FILE not found" >&2; exit 1; }
+ARG="${1:?$(usage)}"
+case "$ARG" in
+    *.stflb) NAME="$ARG" ;;
+    *)       NAME="$ARG.stflb" ;;
+esac
+
+LOCAL_FILE="$(dirname "$0")/../programs/$NAME"
+if [ ! -f "$LOCAL_FILE" ]; then
+    echo "ERROR: $NAME not found in $(dirname "$0")/../programs/" >&2
+    echo "  Run: ./build-programs (from the repo root) to build it" >&2
+    exit 1
+fi
 
 STACK="StoffelCoordinatorStack"
 
@@ -26,6 +38,6 @@ if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
     exit 1
 fi
 
-echo "Uploading $(basename "$LOCAL_FILE") to s3://$BUCKET/ ..."
-aws s3 cp "$LOCAL_FILE" "s3://$BUCKET/$(basename "$LOCAL_FILE")" --region "$COORD_REGION"
-echo "Done. Run './run-nodes $(basename "$LOCAL_FILE")' to start the nodes."
+echo "Uploading $NAME to s3://$BUCKET/ ..."
+aws s3 cp "$LOCAL_FILE" "s3://$BUCKET/$NAME" --region "$COORD_REGION"
+echo "Done. Run './run-nodes $NAME' to start the nodes."

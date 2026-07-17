@@ -1,0 +1,64 @@
+#!/bin/sh
+# Fetch a job's coordinator/party logs and print them in a readable format
+# (grouped by node, one message per line) instead of the raw JSON blob
+# GET /jobs/{job_id}/logs returns.
+#
+# Usage: API_URL=... API_KEY=... ./get-logs <job_id> [output-file]
+set -e
+
+usage() {
+    echo "Usage: API_URL=... API_KEY=... $0 <job_id> [output-file]" >&2
+    exit 1
+}
+
+[ $# -lt 1 ] && usage
+JOB_ID="$1"
+OUTPUT_FILE="${2:-}"
+
+if [ -z "$API_URL" ]; then
+    echo "ERROR: API_URL is not set." >&2
+    exit 1
+fi
+if [ -z "$API_KEY" ]; then
+    echo "ERROR: API_KEY is not set." >&2
+    exit 1
+fi
+API_URL="${API_URL%/}"
+
+RESPONSE=$(curl -sf "$API_URL/jobs/$JOB_ID/logs" -H "x-api-key: $API_KEY") || {
+    echo "ERROR: curl failed (exit $?) fetching logs for $JOB_ID" >&2
+    exit 1
+}
+
+FORMATTED=$(echo "$RESPONSE" | python3 -c "
+import json
+import sys
+
+data = json.load(sys.stdin)
+
+if \"logs\" not in data:
+    print(f\"error: {data.get('error', data)}\")
+    sys.exit(0)
+
+print(f\"job_id: {data.get('job_id', '')}\")
+print(f\"status: {data.get('status', '')}\")
+print()
+
+for node, entries in data.get(\"logs\", {}).items():
+    print(f\"===== {node} ({len(entries)} lines) =====\")
+    for entry in entries:
+        if isinstance(entry, dict):
+            ts = entry.get(\"timestamp\") or \"\"
+            msg = entry.get(\"message\", \"\")
+            print(f\"[{ts}] {msg}\" if ts else msg)
+        else:
+            print(entry)
+    print()
+")
+
+if [ -n "$OUTPUT_FILE" ]; then
+    printf '%s\n' "$FORMATTED" > "$OUTPUT_FILE"
+    echo "Wrote $OUTPUT_FILE"
+else
+    printf '%s\n' "$FORMATTED"
+fi

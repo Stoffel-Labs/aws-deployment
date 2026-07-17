@@ -19,7 +19,7 @@ STOFFEL_CLIENT_INPUT_TOTAL=""
 STOFFEL_MPC_BACKEND="honeybadger"
 STOFFEL_MPC_CURVE="bls12-381"
 STOFFEL_WAIT_FOR_CLIENTS=""
-NUM_PARTIES="5"
+NUM_PARTIES="4"
 THRESHOLD="1"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -41,9 +41,9 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ ! -f "$(dirname "$0")/programs/$(basename "$PROGRAM")" ]; then
-    echo "ERROR: $(basename "$PROGRAM") not found in ./programs/" >&2
-    echo "  Run: ./upload-program $PROGRAM" >&2
+if [ ! -f "$(dirname "$0")/../programs/$(basename "$PROGRAM")" ]; then
+    echo "ERROR: $(basename "$PROGRAM") not found in ../programs/" >&2
+    echo "  Run: ./build-programs (from the repo root) to build it" >&2
     exit 1
 fi
 

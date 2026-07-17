@@ -44,8 +44,8 @@ dial it) — it never needs to look up an IP mid-run.
 
 ## Regions
 
-Defined in `app.py` (`COORD_REGION` / `PARTY_REGIONS`) and mirrored in
-`regions` for the shell scripts — keep both in sync if you change them.
+Single source of truth is `regions.conf` (`COORD_REGION` / `PARTY_REGIONS`),
+read by both `app.py` (CDK) and `regions` (shell scripts) — edit only there.
 Same region assignment as the Fargate cross-region deployment:
 
 | Node | Region |
@@ -134,14 +134,18 @@ with an SSM error immediately after a fresh deploy, wait a minute and retry.
 ./run-client 1 "input_value"   # client 1
 ```
 
-Set `STOFFEL_AUTH_TOKEN` in the environment before running `./run-nodes` if
-your deployment requires an auth token — unlike the Fargate deployment,
-it's read at run-nodes time (not baked in via CDK context at deploy time),
-since nothing here is baked into a task definition ahead of time:
+If your deployment requires an auth token, pass it via CDK context at
+deploy time — same as the Fargate deployment. It's written into each
+instance's user data (`/etc/stoffel-env`) and picked up by `run-nodes` via
+`docker run --env-file`, so it doesn't need to be re-supplied per run:
 
 ```sh
-STOFFEL_AUTH_TOKEN=<token> ./run-nodes client_mul.stflb
+cdk deploy --all --context auth_token=<token>
 ```
+
+Changing the token requires a redeploy that replaces the instance (user
+data only runs on first boot) — a plain `cdk deploy` with a new
+`auth_token` won't retroactively update an already-running instance.
 
 ## Benchmarking
 
@@ -162,13 +166,17 @@ Runs `n_iterations` rounds and appends timing and memory metrics per node
 | `run-exp <file.stflb> [n]` | Run `n` benchmark iterations, write results to `results.csv` |
 | `ping-matrix` | Wait for the last run's containers to stop, then build a full-mesh RTT matrix from their ping output |
 | `get-aws-logs` | Show CloudWatch log group/stream info for the last run, across all regions involved |
+| `tail-logs <coord\|nodeN>...` | Tail CloudWatch logs for the coordinator and/or one or more parties, in parallel |
 | `cleanup-tasks` | Stop the running container (if any) on every node's instance, across all 11 regions |
-| `regions` | Shared region-assignment config, sourced by the other scripts |
+| `regions` | Loads `regions.conf` and provides the `party_region()` lookup helper, sourced by the other scripts |
 
 ## CDK context
 
-No required context variables — see `STOFFEL_AUTH_TOKEN` above for how auth
-tokens are passed instead (at run-nodes time, not deploy time).
+| Context key | Default | Description |
+|---|---|---|
+| `auth_token` | `""` | `STOFFEL_AUTH_TOKEN`, baked into every instance's `/etc/stoffel-env` at deploy time |
+| `num_nodes` | `4` | Number of party regions (from `regions.conf`) to deploy persistent instances for |
+| `threshold` | `1` | MPC threshold `t`; `num_nodes` must be >= `2t+1` |
 
 ## Notes
 

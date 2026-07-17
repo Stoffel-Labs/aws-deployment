@@ -5,7 +5,8 @@ usage() {
     echo "Usage: $0 [log-env-file] [output-csv]" >&2
     echo "  Reads instance/log info from log-env.sh (written by ./run-nodes) and" >&2
     echo "  aggregates each container's full-mesh ping output into an RTT matrix," >&2
-    echo "  written as CSV. Row/column 0 is the coordinator, row/column i+1 is" >&2
+    echo "  written as CSV with a header row of name/region (e.g. coord/us-east-1)." >&2
+    echo "  Row/column 0 is the coordinator, row/column i+1 is" >&2
     echo "  node i. (default log-env-file: log-env.sh, default output: ping-matrix.csv)" >&2
     exit 1
 }
@@ -25,10 +26,11 @@ CONTAINER_NAME="stoffel-run"
 
 # wait_for_container <region> <instance> — runs `docker wait` on the
 # instance via SSM, which blocks server-side until the container exits, then
-# polls the SSM command itself to completion. Every node's entry_point pings
+# polls the SSM command itself to completion. Every party's entry_point pings
 # every peer right before it exits (addresses were known before the node
 # ever started — see run-nodes), so once the container has stopped, every
-# ping line it's going to write is already in CloudWatch.
+# ping line it's going to write is already in CloudWatch. Only called for
+# party containers, not the coordinator's — see the note where it's invoked.
 wait_for_container() {
     REGION="$1"; INSTANCE="$2"
     PARAMS_FILE=$(mktemp)
@@ -67,10 +69,14 @@ print(json.dumps({
     done
 }
 
-echo "Waiting for all node containers to stop (so ping output is complete)..."
+echo "Waiting for all party containers to stop (so ping output is complete)..."
+# The coordinator's container is intentionally excluded here: run-coord is a
+# long-lived server that keeps running after logging "ProgramFinished" (it
+# doesn't exit per-run the way party containers do), so `docker wait` on it
+# would just block until the 2h backstop below. Every party already pings
+# the coordinator, and the matrix builder falls back to that reverse
+# reading for the coord column/row, so there's no need to wait on it here.
 WAIT_PIDS=""
-wait_for_container "$COORD_REGION" "$COORD_INSTANCE" &
-WAIT_PIDS="$WAIT_PIDS $!"
 IDX=0
 while [ "$IDX" -le 9 ]; do
     eval "INSTANCE=\$PARTY${IDX}_INSTANCE"
@@ -134,6 +140,17 @@ while [ "$IDX" -le 9 ]; do
     IDX=$((IDX + 1))
 done
 
+# log-env.sh assigns COORD_REGION/PARTY<i>_REGION as plain (non-exported)
+# shell vars, so they wouldn't reach the python3 subprocess's environment —
+# collect them into a "name=region" list and pass it as an argument instead.
+REGIONS="coord=$COORD_REGION"
+IDX=0
+while [ "$IDX" -le 9 ]; do
+    eval "R=\$PARTY${IDX}_REGION"
+    [ -n "$R" ] && REGIONS="$REGIONS node${IDX}=$R"
+    IDX=$((IDX + 1))
+done
+
 python3 -c "
 import csv, re, sys
 
@@ -149,13 +166,16 @@ node_indices = sorted(
 )
 entities = ['coord'] + [f'node{i}' for i in node_indices]
 
+region_map = dict(pair.split('=', 1) for pair in sys.argv[3].split() if '=' in pair)
+header = [f'{e}/{region_map.get(e, \"\")}' for e in entities]
+
 # Each container's entry_point echoes 'Pinging <name>...' using the same
 # 'coord'/'nodeN' names it read from the address book run-nodes baked into
 # its docker run command, so no name mapping is needed.
 def normalize_target(target):
     return target if target == 'coord' or re.fullmatch(r'node\d+', target) else None
 
-rtts = {}  # (source, target) -> avg rtt ms
+rtts = {}  # (source, target) -> rtt ms
 pending_target = None
 for source, message in entries:
     m = re.match(r'Pinging (.+)\.\.\.$', message)
@@ -170,20 +190,21 @@ for source, message in entries:
 def cell(i, j):
     if i == j:
         return ''
-    a, b = entities[i], entities[j]
-    fwd, back = rtts.get((a, b)), rtts.get((b, a))
-    if fwd is not None and back is not None:
-        return f'{(fwd + back) / 2:.3f}'
-    if fwd is not None:
-        return f'{fwd:.3f}'
-    if back is not None:
-        return f'{back:.3f}'
-    return ''
+    rtt = rtts.get((entities[i], entities[j]))
+    return f'{rtt:.3f}' if rtt is not None else ''
 
 with open(sys.argv[1], 'w', newline='') as f:
     writer = csv.writer(f)
+    writer.writerow(header)
     for i in range(len(entities)):
         writer.writerow([cell(i, j) for j in range(len(entities))])
+    # Exclude the coordinator (row/column 0) so min/max/avg reflect only
+    # inter-party RTTs, not party<->coordinator RTTs.
+    values = [rtt for (src, tgt), rtt in rtts.items() if src != 'coord' and tgt != 'coord']
+    writer.writerow([])
+    writer.writerow(['min', f'{min(values):.3f}' if values else ''])
+    writer.writerow(['max', f'{max(values):.3f}' if values else ''])
+    writer.writerow(['average', f'{sum(values) / len(values):.3f}' if values else ''])
 
 print(f'Wrote {len(entities)}x{len(entities)} RTT matrix to {sys.argv[1]}')
-" "$OUT_CSV" "$RAW"
+" "$OUT_CSV" "$RAW" "$REGIONS"

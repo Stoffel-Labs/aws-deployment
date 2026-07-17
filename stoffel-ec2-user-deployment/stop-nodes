@@ -1,0 +1,45 @@
+#!/bin/sh
+set -e
+
+# Stops the coordinator + every party EC2 instance to avoid paying for
+# compute while the cluster is idle (e.g. overnight). Elastic IPs stay bound
+# to a stopped instance in a VPC and root EBS volumes (with Docker and the
+# pre-pulled images already on them) persist, so this only stops
+# compute (instance-hour) billing; EBS storage and Elastic IP address
+# charges keep accruing regardless of instance state.
+#
+# IMPORTANT: while stopped, the API-driven job path (POST /jobs) will fail -
+# StartJob's SSM Run Command has nothing to reach. Run ./start-nodes before
+# resuming API traffic.
+STACK="StoffelEc2UserDeploymentStack"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+stop_instance() {
+    LABEL="$1"; INSTANCE="$2"
+    echo "Stopping $LABEL ($INSTANCE)..."
+    aws ec2 stop-instances --instance-ids "$INSTANCE" >/dev/null
+}
+
+DEPLOYED_PARTIES=$(get_output DeployedParties)
+if [ -z "$DEPLOYED_PARTIES" ] || [ "$DEPLOYED_PARTIES" = "None" ]; then
+    echo "ERROR: could not resolve $STACK outputs - has it been deployed?" >&2
+    exit 1
+fi
+
+stop_instance "coordinator" "$(get_output CoordInstanceId)"
+
+LAST_PARTY=$((DEPLOYED_PARTIES - 1))
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    stop_instance "party${IDX}" "$(get_output "Party${IDX}InstanceId")"
+    IDX=$((IDX + 1))
+done
+
+echo ""
+echo "Stop requests sent for all $((DEPLOYED_PARTIES + 1)) instances (they take a minute or two to fully stop)."
+echo "Run ./start-nodes when you're ready to use the cluster (or the API) again."

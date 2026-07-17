@@ -1,0 +1,36 @@
+#!/bin/sh
+set -e
+
+# Prints the EC2 instance state (running/stopped/...) of the coordinator and
+# every party, one per line, so you can check what's costing compute right
+# now without hunting through the console.
+STACK="StoffelEc2UserDeploymentStack"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+print_status() {
+    LABEL="$1"; INSTANCE="$2"
+    STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE" \
+        --query 'Reservations[0].Instances[0].State.Name' --output text)
+    printf '%-12s %-20s %s\n' "$LABEL" "$INSTANCE" "$STATE"
+}
+
+DEPLOYED_PARTIES=$(get_output DeployedParties)
+if [ -z "$DEPLOYED_PARTIES" ] || [ "$DEPLOYED_PARTIES" = "None" ]; then
+    echo "ERROR: could not resolve $STACK outputs - has it been deployed?" >&2
+    exit 1
+fi
+
+printf '%-12s %-20s %s\n' "NODE" "INSTANCE" "STATE"
+print_status "coordinator" "$(get_output CoordInstanceId)"
+
+LAST_PARTY=$((DEPLOYED_PARTIES - 1))
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    print_status "party${IDX}" "$(get_output "Party${IDX}InstanceId")"
+    IDX=$((IDX + 1))
+done

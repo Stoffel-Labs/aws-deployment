@@ -1,0 +1,48 @@
+#!/bin/sh
+set -e
+
+# Prints the EC2 instance state (running/stopped/...) of the coordinator and
+# every party, one per line, so you can check what's costing compute right
+# now without hunting through the console across regions.
+#
+# Must match stop-nodes'/start-nodes'/run-nodes' DEPLOYED_PARTIES.
+DEPLOYED_PARTIES=5
+
+. "$(dirname "$0")/regions"
+
+get_output() {
+    # get_output <stack> <region> <output-key>
+    aws cloudformation describe-stacks --stack-name "$1" --region "$2" \
+        --query "Stacks[0].Outputs[?OutputKey=='$3'].OutputValue" \
+        --output text
+}
+
+print_status() {
+    REGION="$1"; INSTANCE="$2"; LABEL="$3"
+    STATE=$(aws ec2 describe-instances --region "$REGION" --instance-ids "$INSTANCE" \
+        --query 'Reservations[0].Instances[0].State.Name' --output text)
+    printf '%-12s %-20s %-15s %s\n' "$LABEL" "$INSTANCE" "$REGION" "$STATE"
+}
+
+printf '%-12s %-20s %-15s %s\n' "NODE" "INSTANCE" "REGION" "STATE"
+
+COORD_INSTANCE=$(get_output "StoffelCoordinatorStack" "$COORD_REGION" InstanceId)
+if [ -z "$COORD_INSTANCE" ] || [ "$COORD_INSTANCE" = "None" ]; then
+    echo "ERROR: could not resolve StoffelCoordinatorStack InstanceId in $COORD_REGION — has it been deployed?" >&2
+    exit 1
+fi
+print_status "$COORD_REGION" "$COORD_INSTANCE" "coordinator"
+
+LAST_PARTY=$((DEPLOYED_PARTIES - 1))
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    REGION=$(party_region "$IDX")
+    STACK="StoffelParty${IDX}Stack"
+    INSTANCE=$(get_output "$STACK" "$REGION" InstanceId)
+    if [ -z "$INSTANCE" ] || [ "$INSTANCE" = "None" ]; then
+        echo "ERROR: could not resolve $STACK InstanceId in $REGION — has it been deployed?" >&2
+        exit 1
+    fi
+    print_status "$REGION" "$INSTANCE" "party${IDX}"
+    IDX=$((IDX + 1))
+done
