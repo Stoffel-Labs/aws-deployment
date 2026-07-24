@@ -165,6 +165,21 @@ class StoffelPartyStack(Stack):
     container, rather than using an init container as the Fargate deployment
     does — there's no task-local ephemeral volume to share between
     containers here, just the instance's own disk.
+
+    Identity certs/keys used to be baked into the party image (see
+    Dockerfile.benchmark-flexible's now-removed `COPY ids /app/ids` in
+    ../StoffelVM). They're no longer part of the image, so — same pattern as
+    the program file above, and mirroring the ids-downloader init container
+    in stoffel-fargate-cross-region-deployment/app.py — this stack's
+    user_data pulls the whole ids/ tree from the same S3 bucket down to the
+    instance's local disk at boot; run-nodes then bind-mounts that local
+    directory into the container as /app/ids (read-only) and re-syncs it
+    before every run so a rotated cert doesn't require replacing the
+    instance. The ids tree is identical across runs (unlike the program), so
+    its S3 location is baked in here at synth time instead of being supplied
+    via a run-nodes-time override. Must be uploaded once via
+    `aws s3 sync ids s3://<ProgramsBucketName>/ids` before the instance's
+    first boot (or re-run `run-nodes` afterward to pick up a later sync).
     """
 
     def __init__(
@@ -234,6 +249,12 @@ class StoffelPartyStack(Stack):
             "systemctl enable --now docker",
             "usermod -aG docker ec2-user",
             "mkdir -p /home/ec2-user/programs",
+            # Identity certs/keys: not baked into the image anymore (see the
+            # class docstring), so pull the whole ids/ tree down to local
+            # disk here; run-nodes bind-mounts this directory into the
+            # container as /app/ids and re-syncs it before every run.
+            "mkdir -p /home/ec2-user/ids",
+            f"aws s3 cp --recursive s3://{programs_bucket_name}/ids/ /home/ec2-user/ids/",
         )
 
         eip = ec2.CfnEIP(self, "Eip", domain="vpc")

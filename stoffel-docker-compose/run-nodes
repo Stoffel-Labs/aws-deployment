@@ -3,34 +3,36 @@
 # Coordinator and all parties are started fresh on every call; docker-compose.yml
 # is regenerated on the fly (via ./gen-docker-compose) to match --num-parties/--threshold.
 #
-# Usage: ./run-nodes <program.stflb> [--loss <pct>] [--bandwidth <mbit>] [--delay <ms>] [--input-total <n>] [--backend avss|honeybadger] [--curve <curve>] [--wait-for-clients <n>] [--num-parties <n>] [--threshold <t>]
-#   e.g. ./run-nodes client_mul.stflb --loss 5 --bandwidth 100 --delay 20 --input-total 4 --backend avss --curve bls12-381 --wait-for-clients 2 --num-parties 7 --threshold 2
+# Usage: ./run-nodes <program.stflb> [--loss <pct>] [--bandwidth <mbit>] [--delay <ms>] [--n-input-clients <n>] [--backend avss|honeybadger] [--curve <curve>] [--wait-for-clients <n>] [--num-parties <n>] [--threshold <t>] [--persistent-runs <val>]
+#   e.g. ./run-nodes client_mul.stflb --loss 5 --bandwidth 100 --delay 20 --n-input-clients 4 --backend avss --curve bls12-381 --wait-for-clients 2 --num-parties 7 --threshold 2 --persistent-runs 5
 
 set -e
 
-usage() { echo "Usage: $0 <program.stflb> [--loss <pct>] [--bandwidth <mbit>] [--delay <ms>] [--input-total <n>] [--backend avss|honeybadger] [--curve <curve>] [--wait-for-clients <n>] [--num-parties <n>] [--threshold <t>]" >&2; exit 1; }
+usage() { echo "Usage: $0 <program.stflb> [--loss <pct>] [--bandwidth <mbit>] [--delay <ms>] [--n-input-clients <n>] [--backend avss|honeybadger] [--curve <curve>] [--wait-for-clients <n>] [--num-parties <n>] [--threshold <t>] [--persistent-runs <val>]" >&2; exit 1; }
 
 PROGRAM="${1:?$(usage)}"; shift
 
 NET_LOSS=""
 NET_BANDWIDTH=""
 NET_DELAY=""
-STOFFEL_CLIENT_INPUT_TOTAL=""
+N_INPUT_CLIENTS=""
 STOFFEL_MPC_BACKEND="honeybadger"
 STOFFEL_MPC_CURVE="bls12-381"
 STOFFEL_WAIT_FOR_CLIENTS=""
 NUM_PARTIES="4"
 THRESHOLD="1"
+STOFFEL_PERSISTENT_RUNS=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --loss)              NET_LOSS="$2";                    shift 2 ;;
         --bandwidth)         NET_BANDWIDTH="$2";               shift 2 ;;
         --delay)             NET_DELAY="$2";                   shift 2 ;;
-        --input-total)       STOFFEL_CLIENT_INPUT_TOTAL="$2";  shift 2 ;;
+        --n-input-clients)   N_INPUT_CLIENTS="$2";             shift 2 ;;
         --curve)             STOFFEL_MPC_CURVE="$2";           shift 2 ;;
         --wait-for-clients)  STOFFEL_WAIT_FOR_CLIENTS="$2";    shift 2 ;;
         --num-parties)       NUM_PARTIES="$2";                 shift 2 ;;
         --threshold)         THRESHOLD="$2";                   shift 2 ;;
+        --persistent-runs)   STOFFEL_PERSISTENT_RUNS="$2";     shift 2 ;;
         --backend)
             case "$2" in
                 avss|honeybadger) STOFFEL_MPC_BACKEND="$2" ;;
@@ -53,6 +55,11 @@ esac
 case "$NUM_PARTIES" in
     ''|*[!0-9]*) echo "Invalid --num-parties: $NUM_PARTIES (expected an integer)" >&2; usage ;;
 esac
+if [ -n "$STOFFEL_PERSISTENT_RUNS" ]; then
+    case "$STOFFEL_PERSISTENT_RUNS" in
+        *[!0-9]*) echo "Invalid --persistent-runs: $STOFFEL_PERSISTENT_RUNS (expected an integer)" >&2; usage ;;
+    esac
+fi
 MIN_PARTIES=$((2 * THRESHOLD + 1))
 if [ "$NUM_PARTIES" -lt "$MIN_PARTIES" ]; then
     echo "Invalid --num-parties: $NUM_PARTIES (must be at least $MIN_PARTIES for threshold $THRESHOLD)" >&2
@@ -60,23 +67,50 @@ if [ "$NUM_PARTIES" -lt "$MIN_PARTIES" ]; then
 fi
 
 export STOFFEL_PROGRAM="/app/programs/$(basename "$PROGRAM")"
+# A fresh nonzero 64-hex execution ID is required by every party/leader/client
+# node for this run; generate one unless the caller already exported one.
+STOFFEL_EXECUTION_ID="${STOFFEL_EXECUTION_ID:-$(openssl rand -hex 32)}"
+export STOFFEL_EXECUTION_ID
 export NET_LOSS
 export NET_BANDWIDTH
 export NET_DELAY
-export STOFFEL_CLIENT_INPUT_TOTAL
 export STOFFEL_MPC_BACKEND
 export STOFFEL_MPC_CURVE
 export STOFFEL_WAIT_FOR_CLIENTS
+export STOFFEL_PERSISTENT_RUNS
+
+# Build the expected-clients cert list from whatever client certs actually
+# exist in ../ids right now, capped to --n-input-clients if given. This is
+# never baked into docker-compose.yml — it's only ever passed to the
+# containers at `docker compose up` time.
+CLIENTS_DIR="$(dirname "$0")/../ids/pub/clients"
+STOFFEL_EXPECTED_CLIENTS=""
+if [ -d "$CLIENTS_DIR" ]; then
+    CERT_LIST=$(ls "$CLIENTS_DIR" | grep -E '^client[0-9]+\.crt$' | sort -V)
+    if [ -n "$N_INPUT_CLIENTS" ]; then
+        if [ "$N_INPUT_CLIENTS" -eq 0 ]; then
+            CERT_LIST=""
+        else
+            CERT_LIST=$(echo "$CERT_LIST" | head -n "$N_INPUT_CLIENTS")
+        fi
+    fi
+    for f in $CERT_LIST; do
+        STOFFEL_EXPECTED_CLIENTS="${STOFFEL_EXPECTED_CLIENTS:+$STOFFEL_EXPECTED_CLIENTS,}/app/ids/pub/clients/$f"
+    done
+fi
+export STOFFEL_EXPECTED_CLIENTS
 
 echo "Starting Stoffel cluster..."
 [ -n "$NET_LOSS" ]                    && echo "  packet loss:   ${NET_LOSS}%"
 [ -n "$NET_BANDWIDTH" ]               && echo "  bandwidth cap: ${NET_BANDWIDTH} mbit/s"
 [ -n "$NET_DELAY" ]                   && echo "  network delay: ${NET_DELAY} ms"
-[ -n "$STOFFEL_CLIENT_INPUT_TOTAL" ]  && echo "  input total:   ${STOFFEL_CLIENT_INPUT_TOTAL}"
+[ -n "$N_INPUT_CLIENTS" ]             && echo "  input clients: ${N_INPUT_CLIENTS}"
+echo "  execution id:  ${STOFFEL_EXECUTION_ID}"
 echo "  backend:       ${STOFFEL_MPC_BACKEND}"
 echo "  curve:         ${STOFFEL_MPC_CURVE}"
 echo "  parties:       ${NUM_PARTIES}"
 echo "  threshold:     ${THRESHOLD}"
+[ -n "$STOFFEL_PERSISTENT_RUNS" ]     && echo "  persistent runs: ${STOFFEL_PERSISTENT_RUNS}"
 
 "$(dirname "$0")/gen-docker-compose" --num-parties "$NUM_PARTIES" --threshold "$THRESHOLD"
 

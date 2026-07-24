@@ -1,0 +1,35 @@
+#!/bin/sh
+# Upload the ids/ directory (identity certs/keys) to the uploads bucket, at
+# the path start_job.py's build_party_script fetches each party's own
+# node{id}.crt/.der from before every docker run. Unlike programs, the ids
+# tree doesn't change per job — upload it once (and again whenever
+# certs/keys are rotated). See the IdsS3Uri stack output.
+set -e
+
+usage() {
+    echo "Usage: $0 <local-ids-dir>" >&2
+    echo "  e.g.: $0 ../ids" >&2
+    exit 1
+}
+
+LOCAL_DIR="${1:?$(usage)}"
+[ -d "$LOCAL_DIR" ] || { echo "ERROR: $LOCAL_DIR is not a directory" >&2; exit 1; }
+
+STACK="StoffelEc2UserDeploymentStack"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+BUCKET=$(get_output UploadsBucketName)
+
+if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
+    echo "ERROR: could not retrieve UploadsBucketName from stack $STACK" >&2
+    exit 1
+fi
+
+echo "Uploading $LOCAL_DIR/ to s3://$BUCKET/ids/ ..."
+aws s3 sync "$LOCAL_DIR" "s3://$BUCKET/ids"
+echo "Done. Jobs submitted from now on will fetch these certs/keys at container start."

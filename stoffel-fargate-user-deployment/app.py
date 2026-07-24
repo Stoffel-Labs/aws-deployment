@@ -71,6 +71,7 @@ class StoffelUserDeploymentStack(Stack):
     THRESHOLD = 1
     NAMESPACE = "stoffel-coord.local"
     PROGRAM_MOUNT = "/app/programs"
+    IDS_MOUNT = "/app/ids"
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -146,6 +147,15 @@ class StoffelUserDeploymentStack(Stack):
         # Users upload via presigned S3 URL; the orchestrator copies the      #
         # file onto EFS before starting a run - there is no other path onto   #
         # EFS in this stack (no bastion/SSH).                                 #
+        #                                                                      #
+        # Also carries party identity files (node certs/keys) at /ids. Those  #
+        # used to be COPY'd straight into the party image by                  #
+        # Dockerfile.benchmark-flexible; that bake-in was removed, so parties  #
+        # now read them from this second, read-only access point instead.     #
+        # Unlike programs there's no presign/orchestrator upload path for     #
+        # these yet - populating /ids on the filesystem is an out-of-band     #
+        # operator step (e.g. a one-off task or EFS mount helper) until one    #
+        # is added.                                                            #
         # ------------------------------------------------------------------ #
         efs_sg = ec2.SecurityGroup(self, "EfsSG", vpc=vpc, allow_all_outbound=False)
         efs_sg.add_ingress_rule(cidr, ec2.Port.tcp(2049))
@@ -157,7 +167,13 @@ class StoffelUserDeploymentStack(Stack):
             removal_policy=cdk.RemovalPolicy.RETAIN,
         )
 
-        access_point = file_system.add_access_point("AP", path="/")
+        # "programs" and "ids" are separate subtrees of the same filesystem —
+        # each access point is scoped to its own directory (both need
+        # create_acl since neither pre-exists on a fresh filesystem) so
+        # mounting one into a container never exposes the other's contents.
+        efs_acl = efs.Acl(owner_uid="0", owner_gid="0", permissions="755")
+        access_point = file_system.add_access_point("AP", path="/programs", create_acl=efs_acl)
+        ids_access_point = file_system.add_access_point("IdsAP", path="/ids", create_acl=efs_acl)
 
         coord_addr = f"coordinator.{self.NAMESPACE}:31415"
 
@@ -178,7 +194,10 @@ class StoffelUserDeploymentStack(Stack):
         coord_task, coord_cm_service = self._add_coordinator(cluster, coordinator_image, sg, log_group)
 
         party_results = [
-            self._add_party(i, cluster, party_image, sg, log_group, common_env, file_system, access_point)
+            self._add_party(
+                i, cluster, party_image, sg, log_group, common_env,
+                file_system, access_point, ids_access_point,
+            )
             for i in range(self.N_PARTIES)
         ]
         party_tasks = [r[0] for r in party_results]
@@ -202,6 +221,14 @@ class StoffelUserDeploymentStack(Stack):
         uploads_bucket = self._add_uploads_bucket()
         jobs_table, lock_table = self._add_tables()
         jobs_queue, jobs_dlq = self._add_queue()
+
+        # One-off task: syncs the ids/ prefix of the uploads bucket onto the
+        # EFS "ids" access point. Unlike programs there's no presign+
+        # orchestrator path for identity files (they don't change per job) —
+        # ./upload-ids runs this once via `aws ecs run-task` after syncing
+        # local ids/ up to s3://<uploads-bucket>/ids/.
+        ids_sync_task = self._add_ids_sync_task(file_system, ids_access_point, uploads_bucket, log_group)
+        CfnOutput(self, "IdsSyncTaskDef", value=ids_sync_task.task_definition_arn)
 
         orchestrator_task, orchestrator_container = self._add_orchestrator(
             cluster, sg, log_group, vpc, file_system, access_point,
@@ -296,6 +323,7 @@ class StoffelUserDeploymentStack(Stack):
         common_env: dict,
         file_system: efs.FileSystem,
         access_point: efs.AccessPoint,
+        ids_access_point: efs.AccessPoint,
     ):
         bind_port = 9000 + party_id
         rpc_port  = 16180 + party_id
@@ -306,8 +334,8 @@ class StoffelUserDeploymentStack(Stack):
             "STOFFEL_PARTY_ID": str(party_id),
             "STOFFEL_BIND_ADDR": f"0.0.0.0:{bind_port}",
             "STOFFEL_RPC_ADDR": f"0.0.0.0:{rpc_port}",
-            "STOFFEL_CERT": f"/app/ids/pub/nodes/node{party_id}.crt",
-            "STOFFEL_KEY": f"/app/ids/priv/nodes/node{party_id}.der",
+            "STOFFEL_CERT": f"{self.IDS_MOUNT}/pub/nodes/node{party_id}.crt",
+            "STOFFEL_KEY": f"{self.IDS_MOUNT}/priv/nodes/node{party_id}.der",
         }
         if party_id != 0:
             environment["STOFFEL_BOOTSTRAP_ADDR"] = f"party0.{self.NAMESPACE}:9000"
@@ -336,6 +364,17 @@ class StoffelUserDeploymentStack(Stack):
                 transit_encryption="ENABLED",
                 authorization_config=ecs.AuthorizationConfig(
                     access_point_id=access_point.access_point_id,
+                    iam="ENABLED",
+                ),
+            ),
+        )
+        task.add_volume(
+            name="ids",
+            efs_volume_configuration=ecs.EfsVolumeConfiguration(
+                file_system_id=file_system.file_system_id,
+                transit_encryption="ENABLED",
+                authorization_config=ecs.AuthorizationConfig(
+                    access_point_id=ids_access_point.access_point_id,
                     iam="ENABLED",
                 ),
             ),
@@ -379,7 +418,12 @@ class StoffelUserDeploymentStack(Stack):
                 container_path=self.PROGRAM_MOUNT,
                 source_volume="programs",
                 read_only=True,
-            )
+            ),
+            ecs.MountPoint(
+                container_path=self.IDS_MOUNT,
+                source_volume="ids",
+                read_only=True,
+            ),
         )
 
         cm_service = sd.Service(
@@ -406,7 +450,9 @@ class StoffelUserDeploymentStack(Stack):
             )],
             # Programs are transient per-job artifacts, not something worth
             # retaining once the orchestrator has copied them onto EFS.
-            lifecycle_rules=[s3.LifecycleRule(expiration=Duration.days(3))],
+            # Scoped to uploads/ so it doesn't also expire the long-lived
+            # ids/ tree that ./upload-ids syncs into this same bucket.
+            lifecycle_rules=[s3.LifecycleRule(prefix="uploads/", expiration=Duration.days(3))],
         )
 
     def _add_tables(self):
@@ -443,6 +489,39 @@ class StoffelUserDeploymentStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
         return jobs_queue, jobs_dlq
+
+    def _add_ids_sync_task(
+        self,
+        file_system: efs.FileSystem,
+        ids_access_point: efs.AccessPoint,
+        uploads_bucket: s3.Bucket,
+        log_group: logs.LogGroup,
+    ) -> ecs.FargateTaskDefinition:
+        task = ecs.FargateTaskDefinition(self, "IdsSyncTask", cpu=256, memory_limit_mib=512)
+        task.add_volume(
+            name="ids",
+            efs_volume_configuration=ecs.EfsVolumeConfiguration(
+                file_system_id=file_system.file_system_id,
+                transit_encryption="ENABLED",
+                authorization_config=ecs.AuthorizationConfig(
+                    access_point_id=ids_access_point.access_point_id,
+                    iam="ENABLED",
+                ),
+            ),
+        )
+        file_system.grant_read_write(task.task_role)
+        uploads_bucket.grant_read(task.task_role)
+
+        container = task.add_container(
+            "Container",
+            image=ecs.ContainerImage.from_registry("public.ecr.aws/aws-cli/aws-cli"),
+            logging=self._log_driver(log_group, "ids-sync"),
+            command=["s3", "sync", f"s3://{uploads_bucket.bucket_name}/ids/", "/mnt/ids/"],
+        )
+        container.add_mount_points(
+            ecs.MountPoint(container_path="/mnt/ids", source_volume="ids", read_only=False)
+        )
+        return task
 
     def _add_orchestrator(
         self,

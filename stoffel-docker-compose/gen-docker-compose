@@ -14,7 +14,6 @@ import os
 import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-NUM_CLIENTS = 512
 
 
 def max_parties() -> int:
@@ -23,23 +22,37 @@ def max_parties() -> int:
     return len(certs)
 
 
+COORD_IP = "172.28.0.5"
+
+
+def party_ip(i: int) -> str:
+    return f"172.28.0.{10 + i}"
+
+
 def gen(n: int, t: int) -> str:
     node_certs = ",".join(f"/app/ids/pub/nodes/node{i}.crt" for i in range(n))
-    client_certs = ",".join(f"/app/ids/pub/clients/client{i}.crt" for i in range(NUM_CLIENTS))
+    party_ip_array = " ".join(party_ip(i) for i in range(n))
+    node_rpc_addrs = ",".join(f"{party_ip(i)}:{16180 + i}" for i in range(n))
 
     lines = [
         "networks:",
         "  stoffel:",
         "    driver: bridge",
+        "    ipam:",
+        "      config:",
+        "        - subnet: 172.28.0.0/16",
+        "          gateway: 172.28.0.1",
         "",
         "# Common build + mount config shared by all party containers.",
         "x-party: &party",
         "  build:",
         "    context: ../StoffelVM",
-        "    dockerfile: Dockerfile.benchmark-flexible",
+        "    dockerfile: Dockerfile.benchmark",
+        "    additional_contexts:",
+        "      coordinator: ../stoffel-mpc-coordinator",
         "  volumes:",
         "    - ../programs:/app/programs:ro",
-        "    - ../ids:/app/ids:ro",
+        "    - ../ids/pub:/app/ids/pub:ro",
         "  cap_add: [NET_ADMIN]",
         "  # Wrapper: apply tc netem rules if NET_LOSS / NET_BANDWIDTH are set,",
         "  # then run the party, and print peak memory on exit.",
@@ -54,12 +67,13 @@ def gen(n: int, t: int) -> str:
         '          || echo "WARNING: tc failed — iproute2 may not be installed in the image" >&2',
         "      fi",
         "      /app/entrypoint.sh; EXIT=$$?",
+        f"      PARTY_IP=({party_ip_array})",
         '      echo "Pinging coordinator..."',
-        "      ping -c 4 coordinator.stoffel-coord.local || true",
+        f"      ping -c 4 {COORD_IP} || true",
         f'      for i in $$(seq 0 {n - 1}); do',
         '        [ "$$i" = "$$STOFFEL_PARTY_ID" ] && continue',
         '        echo "Pinging party$$i..."',
-        "        ping -c 4 party$$i.stoffel-coord.local || true",
+        "        ping -c 4 $${PARTY_IP[$$i]} || true",
         "      done",
         "      MEM=$$(cat /sys/fs/cgroup/memory.peak 2>/dev/null \\",
         "          || cat /sys/fs/cgroup/memory/memory.max_usage_in_bytes 2>/dev/null \\",
@@ -73,12 +87,14 @@ def gen(n: int, t: int) -> str:
         "# Environment variables shared by all parties.",
         "x-common-env: &common-env",
         '  STOFFEL_AUTH_TOKEN: "${STOFFEL_AUTH_TOKEN:-}"',
+        '  STOFFEL_EXECUTION_ID: "${STOFFEL_EXECUTION_ID}"',
         f'  STOFFEL_N_PARTIES: "{n}"',
         f'  STOFFEL_THRESHOLD: "{t}"',
         "  STOFFEL_ENTRY: main",
-        '  STOFFEL_COORD_ADDR: "coordinator.stoffel-coord.local:31415"',
-        f'#  STOFFEL_EXPECTED_CLIENTS: "{client_certs}"',
+        f'  STOFFEL_COORD_ADDR: "{COORD_IP}:31415"',
+        '  STOFFEL_EXPECTED_CLIENTS: "${STOFFEL_EXPECTED_CLIENTS:-}"',
         '  STOFFEL_PROGRAM: "${STOFFEL_PROGRAM}"',
+        '  STOFFEL_PERSISTENT_RUNS: "${STOFFEL_PERSISTENT_RUNS:-}"',
         "  STOFFEL_MPC_BACKEND: ${STOFFEL_MPC_BACKEND:-honeybadger}",
         "  STOFFEL_MPC_CURVE: ${STOFFEL_MPC_CURVE:-bls12-381}",
         "  RUST_MIN_STACK: ${RUST_MIN_STACK:-67108864}",
@@ -86,7 +102,6 @@ def gen(n: int, t: int) -> str:
         '  RUST_BACKTRACE: "1"',
         '  NET_LOSS: "${NET_LOSS:-}"',
         '  NET_BANDWIDTH: "${NET_BANDWIDTH:-}"',
-        '  STOFFEL_CLIENT_INPUT_TOTAL: "${STOFFEL_CLIENT_INPUT_TOTAL:-}"',
         '  STOFFEL_WAIT_FOR_CLIENTS: "${STOFFEL_WAIT_FOR_CLIENTS:-}"',
         '  STOFFEL_SKIP_HOST_WAIT: "true"',
         "",
@@ -96,7 +111,9 @@ def gen(n: int, t: int) -> str:
         "      context: ../stoffel-mpc-coordinator",
         "      dockerfile: Dockerfile.benchmark",
         "    volumes:",
-        "      - ../ids:/app/ids:ro",
+        "      - ../programs:/app/programs:ro",
+        "      - ../ids/pub:/app/ids/pub:ro",
+        "      - ../ids/priv/coord.der:/app/ids/priv/coord.der:ro",
         "    # Wrapper: run the coordinator binary, then (once it exits) ping",
         "    # every party for RTT measurement. \"run-coord\" is a $0 placeholder",
         '    # so that the args below land in "$$@" starting at $$1.',
@@ -104,9 +121,10 @@ def gen(n: int, t: int) -> str:
         "    command:",
         "      - |",
         '        /app/run-coord "$$@"; EXIT=$$?',
+        f"        PARTY_IP=({party_ip_array})",
         f'        for i in $$(seq 0 {n - 1}); do',
         '          echo "Pinging party$$i..."',
-        "          ping -c 4 party$$i.stoffel-coord.local || true",
+        "          ping -c 4 $${PARTY_IP[$$i]} || true",
         "        done",
         "        exit $$EXIT",
         "      - run-coord",
@@ -122,12 +140,18 @@ def gen(n: int, t: int) -> str:
         f'      - "{n}"',
         "      - --t",
         f'      - "{t}"',
-        "      - --n-inputs",
-        '      - "${STOFFEL_CLIENT_INPUT_TOTAL:-0}"',
-        "      - --backend",
-        "      - ${STOFFEL_MPC_BACKEND:-honeybadger}",
-        "      - --output-clients",
-        f'      - "{client_certs}"',
+        "      - --program",
+        '      - "${STOFFEL_PROGRAM}"',
+    ]
+
+    expected_clients = os.environ.get("STOFFEL_EXPECTED_CLIENTS", "")
+    if expected_clients:
+        lines += [
+            "      - --output-clients",
+            f'      - "{expected_clients}"',
+        ]
+
+    lines += [
         "      - --initial-mpc-nodes",
         f'      - "{node_certs}"',
         "    ports:",
@@ -140,7 +164,7 @@ def gen(n: int, t: int) -> str:
         "      start_period: 10s",
         "    networks:",
         "      stoffel:",
-        "        aliases: [coordinator.stoffel-coord.local]",
+        f"        ipv4_address: {COORD_IP}",
         "",
     ]
 
@@ -148,6 +172,7 @@ def gen(n: int, t: int) -> str:
         bind_port = 9000 + i
         rpc_port = 16180 + i
         role = "leader" if i == 0 else "party"
+        ip = party_ip(i)
 
         lines += [
             f"  party{i}:",
@@ -156,15 +181,25 @@ def gen(n: int, t: int) -> str:
             "      <<: *common-env",
             f"      STOFFEL_ROLE: {role}",
             f'      STOFFEL_PARTY_ID: "{i}"',
-            f'      STOFFEL_BIND_ADDR: "0.0.0.0:{bind_port}"',
-            f'      STOFFEL_RPC_ADDR: "0.0.0.0:{rpc_port}"',
+            f'      STOFFEL_BIND_ADDR: "{ip}:{bind_port}"',
+            f'      STOFFEL_ADVERTISE_IP: "{ip}"',
+            f'      STOFFEL_RPC_ADDR: "{ip}:{rpc_port}"',
             f"      STOFFEL_CERT: /app/ids/pub/nodes/node{i}.crt",
             f"      STOFFEL_KEY: /app/ids/priv/nodes/node{i}.der",
+            "      STOFFEL_PREPROC_STORE: /var/lib/stoffel-preproc",
         ]
-        if i > 0:
-            lines.append('      STOFFEL_BOOTSTRAP_ADDR: "party0.stoffel-coord.local:9000"')
+        if i == 0:
+            lines.append(f'      STOFFEL_NODE_RPC_ADDRS: "{node_rpc_addrs}"')
+        else:
+            lines.append(f'      STOFFEL_BOOTSTRAP_ADDR: "{party_ip(0)}:9000"')
+        lines.append("      STOFFEL_NODE_RPC_DESIGNATED_PARTY_CERT: /app/ids/pub/nodes/node0.crt")
 
         lines += [
+            "    volumes:",
+            "      - ../programs:/app/programs:ro",
+            "      - ../ids/pub:/app/ids/pub:ro",
+            f"      - ../ids/priv/nodes/node{i}.der:/app/ids/priv/nodes/node{i}.der:ro",
+            f"      - party{i}-preproc:/var/lib/stoffel-preproc",
             "    ports:",
             f'      - "{bind_port}:{bind_port}"',
             f'      - "{rpc_port}:{rpc_port}"',
@@ -192,9 +227,13 @@ def gen(n: int, t: int) -> str:
         lines += [
             "    networks:",
             "      stoffel:",
-            f"        aliases: [party{i}.stoffel-coord.local]",
+            f"        ipv4_address: {ip}",
             "",
         ]
+
+    lines += ["volumes:"]
+    for i in range(n):
+        lines.append(f"  party{i}-preproc:")
 
     return "\n".join(lines)
 

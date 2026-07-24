@@ -169,6 +169,7 @@ COORD_INSTANCE=$(out CoordInstanceId)
 COORD_PUBLIC_IP=$(out CoordPublicIp)
 COORD_IMAGE_URI=$(out CoordImageUri)
 PARTY_IMAGE_URI=$(out PartyImageUri)
+UPLOADS_BUCKET=$(out UploadsBucketName)
 COORD_PRIVATE_IP=$(get_private_ip "$COORD_INSTANCE")
 
 IDX=0
@@ -314,9 +315,15 @@ lines = [
     'aws ecr get-login-password --region \$REGION | docker login --username AWS --password-stdin \${PARTY_IMAGE_URI%%/*}',
     'docker pull \$PARTY_IMAGE_URI',
     f'docker rm -f \$CONTAINER_NAME >/dev/null 2>&1 || true',
+    # Identity certs/keys are no longer baked into the party image (see
+    # StoffelVM's now bake-free Dockerfile.benchmark-flexible) — re-sync them
+    # from the uploads bucket before every run, same re-pull-per-run choice
+    # already made above for the image itself.
+    'mkdir -p /home/ec2-user/ids',
+    'aws s3 sync s3://\$UPLOADS_BUCKET/ids/ /home/ec2-user/ids/ --region \$REGION',
     f'docker run -d --name \$CONTAINER_NAME --network host --log-driver awslogs '
     f'--log-opt awslogs-region=\$REGION --log-opt awslogs-group=\$LOG_GROUP --log-opt awslogs-stream={stream} '
-    f'-v /home/ec2-user/programs:/app/programs:ro --env-file /etc/stoffel-env {env_flags} '
+    f'-v /home/ec2-user/programs:/app/programs:ro -v /home/ec2-user/ids:/app/ids:ro --env-file /etc/stoffel-env {env_flags} '
     f'--entrypoint /bin/bash \$PARTY_IMAGE_URI -c \'{entry}\'',
 ]
 print('\n'.join(lines))
@@ -331,6 +338,7 @@ PARTY0_SCRIPT=$(mktemp)
     echo "LOG_GROUP=$LOG_GROUP"
     echo "CONTAINER_NAME=$CONTAINER_NAME"
     echo "PARTY_IMAGE_URI=$PARTY_IMAGE_URI"
+    echo "UPLOADS_BUCKET=$UPLOADS_BUCKET"
     build_party_script "0" "9000" "16180" "$PROGRAM_PATH" "$N_INPUTS" \
         "$STOFFEL_MPC_BACKEND" "$STOFFEL_MPC_CURVE" "$NUM_PARTIES" "$THRESHOLD" "$COORD_ADDR" "" \
         "party0/$RUN_ID" "$(ping_snippet node0 "$ADDR_BOOK")"
@@ -367,6 +375,7 @@ if [ "$LAST_PARTY" -ge 1 ]; then
             echo "LOG_GROUP=$LOG_GROUP"
             echo "CONTAINER_NAME=$CONTAINER_NAME"
             echo "PARTY_IMAGE_URI=$PARTY_IMAGE_URI"
+            echo "UPLOADS_BUCKET=$UPLOADS_BUCKET"
             build_party_script "$IDX" "$BIND_PORT" "$RPC_PORT" "$PROGRAM_PATH" "$N_INPUTS" \
                 "$STOFFEL_MPC_BACKEND" "$STOFFEL_MPC_CURVE" "$NUM_PARTIES" "$THRESHOLD" "$COORD_ADDR" \
                 "$BOOTSTRAP_ADDR" "party${IDX}/$RUN_ID" "$(ping_snippet "node${IDX}" "$ADDR_BOOK")"

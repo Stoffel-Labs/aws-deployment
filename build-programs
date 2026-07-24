@@ -9,7 +9,7 @@
 set -e
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-STOFFEL="$ROOT/StoffelVM/target/debug/stoffel"
+STOFFEL="$ROOT/StoffelVM/target/release/stoffel"
 SRC_DIR="$ROOT/src"
 OUT_DIR="$ROOT/programs"
 

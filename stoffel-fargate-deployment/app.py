@@ -120,12 +120,23 @@ class StoffelVMCoordinatorStack(Stack):
             removal_policy=cdk.RemovalPolicy.RETAIN,
         )
 
-        access_point = file_system.add_access_point("AP", path="/")
+        # "programs" and "ids" are separate subtrees of the same filesystem —
+        # each access point is scoped to its own directory so mounting one
+        # into a container never exposes the other's contents.
+        efs_acl = efs.Acl(owner_uid="1000", owner_gid="1000", permissions="0755")
+        access_point = file_system.add_access_point("AP", path="/programs", create_acl=efs_acl)
+        # Identity certs/keys are no longer baked into the party image (see
+        # StoffelVM's Dockerfile.benchmark-flexible) — they're read from this
+        # access point at runtime instead, same as programs are.
+        ids_access_point = file_system.add_access_point("APIds", path="/ids", create_acl=efs_acl)
 
         # ------------------------------------------------------------------ #
-        # Bastion EC2: SSH target for uploading .stflb files onto EFS.        #
-        # scp foo.stflb ec2-user@<BastionPublicIp>:/mnt/programs/            #
-        # Fargate tasks see the same files at /app/programs/.                 #
+        # Bastion EC2: SSH target for uploading .stflb files and ids onto     #
+        # EFS. The bastion mounts the filesystem root directly (bypassing    #
+        # access points), so /programs and /ids show up as sibling dirs:     #
+        # scp foo.stflb ec2-user@<BastionPublicIp>:/mnt/efs/programs/        #
+        # scp -r ids ec2-user@<BastionPublicIp>:/mnt/efs/                    #
+        # Fargate tasks see these at /app/programs/ and /app/ids/ respectively.#
         # Run ./gen-keypair before deploying to generate bastion-key.         #
         # ------------------------------------------------------------------ #
         bastion_key_pair = ec2.KeyPair(
@@ -154,10 +165,11 @@ class StoffelVMCoordinatorStack(Stack):
         )
         bastion.user_data.add_commands(
             "yum install -y amazon-efs-utils",
-            "mkdir -p /mnt/programs",
-            f"mount -t efs -o tls,iam {file_system.file_system_id}:/ /mnt/programs",
-            f"echo '{file_system.file_system_id}:/ /mnt/programs efs defaults,tls,iam,_netdev 0 0' >> /etc/fstab",
-            "chmod 777 /mnt/programs",
+            "mkdir -p /mnt/efs",
+            f"mount -t efs -o tls,iam {file_system.file_system_id}:/ /mnt/efs",
+            f"echo '{file_system.file_system_id}:/ /mnt/efs efs defaults,tls,iam,_netdev 0 0' >> /etc/fstab",
+            "mkdir -p /mnt/efs/programs /mnt/efs/ids",
+            "chmod 777 /mnt/efs /mnt/efs/programs /mnt/efs/ids",
         )
         bastion.node.add_dependency(file_system)
 
@@ -180,7 +192,7 @@ class StoffelVMCoordinatorStack(Stack):
         coord_task, coord_cm_service = self._add_coordinator(cluster, coordinator_image, sg, log_group)
 
         party_results = [
-            self._add_party(i, cluster, party_image, sg, log_group, common_env, file_system, access_point)
+            self._add_party(i, cluster, party_image, sg, log_group, common_env, file_system, access_point, ids_access_point)
             for i in range(self.N_PARTIES)
         ]
         party_tasks = [r[0] for r in party_results]
@@ -268,6 +280,7 @@ class StoffelVMCoordinatorStack(Stack):
         common_env: dict,
         file_system: efs.FileSystem,
         access_point: efs.AccessPoint,
+        ids_access_point: efs.AccessPoint,
     ):
         bind_port = 9000 + party_id
         rpc_port  = 16180 + party_id
@@ -312,6 +325,17 @@ class StoffelVMCoordinatorStack(Stack):
                 ),
             ),
         )
+        task.add_volume(
+            name="ids",
+            efs_volume_configuration=ecs.EfsVolumeConfiguration(
+                file_system_id=file_system.file_system_id,
+                transit_encryption="ENABLED",
+                authorization_config=ecs.AuthorizationConfig(
+                    access_point_id=ids_access_point.access_point_id,
+                    iam="ENABLED",
+                ),
+            ),
+        )
         file_system.grant_read(task.task_role)
 
         container_kwargs = dict(
@@ -351,7 +375,12 @@ class StoffelVMCoordinatorStack(Stack):
                 container_path=self.PROGRAM_MOUNT,
                 source_volume="programs",
                 read_only=True,
-            )
+            ),
+            ecs.MountPoint(
+                container_path="/app/ids",
+                source_volume="ids",
+                read_only=True,
+            ),
         )
 
         cm_service = sd.Service(

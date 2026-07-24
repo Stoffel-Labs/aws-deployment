@@ -204,6 +204,10 @@ class StoffelEc2UserDeploymentStack(Stack):
         api, api_key, usage_plan = self._add_api(uploads_bucket, jobs_table, jobs_queue, log_group)
 
         CfnOutput(self, "UploadsBucketName", value=uploads_bucket.bucket_name)
+        # Operator step, not part of the automated API flow: party identity
+        # certs/keys must land here (aws s3 sync ids/ <this-uri>) before the
+        # first job runs - see _add_party and build_party_script.
+        CfnOutput(self, "IdsS3Uri", value=f"s3://{uploads_bucket.bucket_name}/ids/")
         CfnOutput(self, "JobsTableName", value=jobs_table.table_name)
         CfnOutput(self, "JobsQueueUrl", value=jobs_queue.queue_url)
         CfnOutput(self, "JobsDlqUrl", value=jobs_dlq.queue_url)
@@ -296,7 +300,25 @@ class StoffelEc2UserDeploymentStack(Stack):
         log_group.grant_write(instance.role)
         uploads_bucket.grant_read(instance.role)
         self._base_user_data(instance, image, auth_token)
-        instance.user_data.add_commands("mkdir -p /home/ec2-user/programs")
+        # Party identity cert/key are no longer baked into the party image
+        # (Dockerfile.benchmark-flexible in ../StoffelVM mounts /app/ids at
+        # `docker run` time instead - see its comments). They live in this
+        # same uploads bucket under ids/ (operator-uploaded out of band,
+        # e.g. `aws s3 sync ids/ s3://<uploads-bucket>/ids/`, mirroring the
+        # ids/ directory layout in ../StoffelVM: pub/nodes/node{i}.crt,
+        # priv/nodes/node{i}.der, ...). These directories just need to
+        # exist before the first job's SSM script runs; the actual
+        # `aws s3 cp` of this party's own node{party_id} cert/key happens
+        # per job in lambdas/start_job.py's build_party_script, right
+        # before `docker run`, the same way the program file is fetched -
+        # not here in boot-time user data - so a job started any time after
+        # the operator's ids upload (even one predating this instance's
+        # boot) always gets current certs, with no dependency on upload/
+        # boot ordering at `cdk deploy` time.
+        instance.user_data.add_commands(
+            "mkdir -p /home/ec2-user/programs",
+            "mkdir -p /home/ec2-user/ids/pub/nodes /home/ec2-user/ids/priv/nodes",
+        )
 
         eip = self._add_eip(f"Party{party_id}", instance)
         return instance, eip
@@ -314,8 +336,11 @@ class StoffelEc2UserDeploymentStack(Stack):
                 allowed_headers=["*"],
             )],
             # Programs are transient per-job artifacts, not something worth
-            # retaining once a party instance has copied them onto local disk.
-            lifecycle_rules=[s3.LifecycleRule(expiration=Duration.days(3))],
+            # retaining once a party instance has copied them onto local
+            # disk - scoped to uploads/ (see presign.py) so it doesn't also
+            # expire the long-lived ids/ tree (see _add_party) that shares
+            # this bucket.
+            lifecycle_rules=[s3.LifecycleRule(prefix="uploads/", expiration=Duration.days(3))],
         )
 
     def _add_tables(self):

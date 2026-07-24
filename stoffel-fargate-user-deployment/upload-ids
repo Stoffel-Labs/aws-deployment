@@ -1,0 +1,75 @@
+#!/bin/sh
+# Upload the ids/ directory (identity certs/keys) so party containers can
+# read them from the EFS "ids" access point. Unlike programs there's no
+# presign+orchestrator path for this (the ids tree doesn't change per job) -
+# this syncs straight to S3 with the caller's own AWS credentials, then runs
+# a one-off Fargate task (IdsSyncTask) that pulls s3://<bucket>/ids/ onto the
+# EFS access point party containers mount at /app/ids.
+set -e
+
+usage() {
+    echo "Usage: $0 <local-ids-dir>" >&2
+    echo "  e.g.: $0 ../ids" >&2
+    exit 1
+}
+
+LOCAL_DIR="${1:?$(usage)}"
+[ -d "$LOCAL_DIR" ] || { echo "ERROR: $LOCAL_DIR is not a directory" >&2; exit 1; }
+
+STACK="StoffelUserDeploymentStack"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+BUCKET=$(get_output UploadsBucketName)
+if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
+    echo "ERROR: could not retrieve UploadsBucketName from stack $STACK" >&2
+    exit 1
+fi
+
+CLUSTER=$(get_output ClusterName)
+TASK_DEF=$(get_output IdsSyncTaskDef)
+SUBNETS=$(get_output SubnetIds)
+SG=$(get_output SecurityGroupId)
+
+for v_name in CLUSTER TASK_DEF SUBNETS SG; do
+    eval "v=\$$v_name"
+    if [ -z "$v" ] || [ "$v" = "None" ]; then
+        echo "ERROR: could not retrieve $v_name from stack $STACK" >&2
+        exit 1
+    fi
+done
+
+echo "Uploading $LOCAL_DIR/ to s3://$BUCKET/ids/ ..."
+aws s3 sync "$LOCAL_DIR" "s3://$BUCKET/ids"
+
+SUBNETS_JSON=$(echo "$SUBNETS" | awk -F, '{printf "["; for(i=1;i<=NF;i++){printf "\"%s\"%s",$i,(i<NF?",":"")}; printf "]"}')
+
+echo "Running IdsSyncTask to pull ids/ onto EFS..."
+TASK_ARN=$(aws ecs run-task \
+    --cluster "$CLUSTER" \
+    --task-definition "$TASK_DEF" \
+    --launch-type FARGATE \
+    --network-configuration "awsvpcConfiguration={subnets=${SUBNETS_JSON},securityGroups=[\"$SG\"],assignPublicIp=ENABLED}" \
+    --query 'tasks[0].taskArn' --output text)
+
+if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+    echo "ERROR: failed to start IdsSyncTask" >&2
+    exit 1
+fi
+
+echo "Waiting for IdsSyncTask ($TASK_ARN) to finish..."
+aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK_ARN"
+
+EXIT_CODE=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+    --query 'tasks[0].containers[0].exitCode' --output text)
+
+if [ "$EXIT_CODE" != "0" ]; then
+    echo "ERROR: IdsSyncTask exited with code $EXIT_CODE - check its CloudWatch logs" >&2
+    exit 1
+fi
+
+echo "Done. Party containers will pick this up on their next start."

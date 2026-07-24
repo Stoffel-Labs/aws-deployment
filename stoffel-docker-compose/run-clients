@@ -14,7 +14,7 @@ N="${1:?$(usage)}"; shift
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-"$DIR/run-nodes" "$PROGRAM" --input-total "$N" "$@"
+"$DIR/run-nodes" "$PROGRAM" --n-input-clients "$N" "$@"
 
 sleep 1
 

@@ -184,10 +184,25 @@ def build_party_script(
         "set -e",
         "mkdir -p /home/ec2-user/programs",
         f"aws s3 cp s3://{PROGRAM_S3_BUCKET}/{program_s3_key} /home/ec2-user/programs/{program_basename}",
+        # Identity cert/key are no longer baked into the party image (see
+        # ../StoffelVM/Dockerfile.benchmark-flexible) - fetch this party's
+        # own node cert/key fresh from S3 on every job start, same as the
+        # program above, then bind-mount the local ids/ tree into the
+        # container at /app/ids to match STOFFEL_CERT/STOFFEL_KEY below.
+        # Fetching per job (not once at instance boot) means a job started
+        # anytime after the operator's `aws s3 sync ids/ s3://<bucket>/ids/`
+        # (see app.py's IdsS3Uri output) always picks up current certs,
+        # regardless of when this instance itself booted.
+        "mkdir -p /home/ec2-user/ids/pub/nodes /home/ec2-user/ids/priv/nodes",
+        f"aws s3 cp s3://{PROGRAM_S3_BUCKET}/ids/pub/nodes/node{party_id}.crt "
+        f"/home/ec2-user/ids/pub/nodes/node{party_id}.crt",
+        f"aws s3 cp s3://{PROGRAM_S3_BUCKET}/ids/priv/nodes/node{party_id}.der "
+        f"/home/ec2-user/ids/priv/nodes/node{party_id}.der",
         f"docker rm -f {CONTAINER_NAME} >/dev/null 2>&1 || true",
         f"docker run -d --name {CONTAINER_NAME} --network host --log-driver awslogs "
         f"--log-opt awslogs-region={REGION} --log-opt awslogs-group={LOG_GROUP_NAME} --log-opt awslogs-stream={stream} "
-        f"-v /home/ec2-user/programs:/app/programs:ro --env-file /etc/stoffel-env {env_flags} "
+        f"-v /home/ec2-user/programs:/app/programs:ro -v /home/ec2-user/ids:/app/ids:ro "
+        f"--env-file /etc/stoffel-env {env_flags} "
         f"--entrypoint /bin/bash {PARTY_IMAGE_URI} -c '{entry}'",
     ])
 

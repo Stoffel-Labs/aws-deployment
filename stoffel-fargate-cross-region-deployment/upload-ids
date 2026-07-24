@@ -1,0 +1,32 @@
+#!/bin/sh
+# Upload the ids/ directory (identity certs/keys) to the shared S3 bucket
+# that every party's IdsDownloader init container syncs from at task start.
+# Unlike programs, the ids tree doesn't change per run-nodes invocation —
+# upload it once (and again whenever certs/keys are rotated).
+set -e
+
+. "$(dirname "$0")/regions"
+
+usage() {
+    echo "Usage: $0 <local-ids-dir>" >&2
+    echo "  e.g.: $0 ../ids" >&2
+    exit 1
+}
+
+LOCAL_DIR="${1:?$(usage)}"
+[ -d "$LOCAL_DIR" ] || { echo "ERROR: $LOCAL_DIR is not a directory" >&2; exit 1; }
+
+STACK="StoffelCoordinatorStack"
+
+BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$COORD_REGION" \
+    --query "Stacks[0].Outputs[?OutputKey=='ProgramsBucketName'].OutputValue" \
+    --output text)
+
+if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
+    echo "ERROR: could not retrieve ProgramsBucketName from stack $STACK in $COORD_REGION" >&2
+    exit 1
+fi
+
+echo "Uploading $LOCAL_DIR/ to s3://$BUCKET/ids/ ..."
+aws s3 sync "$LOCAL_DIR" "s3://$BUCKET/ids" --region "$COORD_REGION"
+echo "Done."

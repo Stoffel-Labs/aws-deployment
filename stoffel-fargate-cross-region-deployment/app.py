@@ -287,6 +287,15 @@ class StoffelPartyStack(Stack):
 
         task = ecs.FargateTaskDefinition(self, "PartyTask", cpu=512, memory_limit_mib=1024)
         task.add_volume(name="programs")
+        # Identity certs/keys used to be baked into the party image (see
+        # Dockerfile.benchmark-flexible's now-removed `COPY ids /app/ids`).
+        # They're no longer part of the image, so — same pattern as the
+        # program file below — an init container pulls them from S3 into a
+        # task-scoped scratch volume before the party container starts.
+        # Unlike the program (chosen per run-nodes invocation), the ids tree
+        # is identical across runs, so its S3 location is baked in here at
+        # synth time rather than supplied via a run-nodes-time override.
+        task.add_volume(name="ids")
         # See the matching volume/AddressWaiter in StoffelCoordinatorStack for
         # why the full-mesh ping list arrives this way instead of via a
         # startup override.
@@ -310,6 +319,24 @@ class StoffelPartyStack(Stack):
         )
         downloader.add_mount_points(
             ecs.MountPoint(container_path=self.PROGRAM_MOUNT, source_volume="programs", read_only=False)
+        )
+
+        # Pulls the whole ids/ tree (this party only strictly needs its own
+        # node{party_id}.crt/.der, but the coordinator's --output-clients /
+        # --initial-mpc-nodes args reference other parties' pub certs too,
+        # and copying the small cert tree wholesale keeps this in sync with
+        # whatever's uploaded under s3://<bucket>/ids/ without per-file
+        # placeholders). Must be uploaded once via
+        # `aws s3 sync ids s3://<ProgramsBucketName>/ids` before first run.
+        ids_downloader = task.add_container(
+            "IdsDownloader",
+            image=ecs.ContainerImage.from_registry("public.ecr.aws/aws-cli/aws-cli"),
+            essential=False,
+            command=["s3", "cp", "--recursive", f"s3://{programs_bucket_name}/ids/", "/app/ids/"],
+            logging=ecs.LogDrivers.aws_logs(stream_prefix="ids-downloader", log_group=log_group),
+        )
+        ids_downloader.add_mount_points(
+            ecs.MountPoint(container_path="/app/ids", source_volume="ids", read_only=False)
         )
 
         port_mappings = [
@@ -365,13 +392,18 @@ class StoffelPartyStack(Stack):
         container = task.add_container("Container", **container_kwargs)
         container.add_mount_points(
             ecs.MountPoint(container_path=self.PROGRAM_MOUNT, source_volume="programs", read_only=True),
+            ecs.MountPoint(container_path="/app/ids", source_volume="ids", read_only=True),
             ecs.MountPoint(container_path="/shared", source_volume="addresses", read_only=True),
         )
         container.add_container_dependencies(
             ecs.ContainerDependency(
                 container=downloader,
                 condition=ecs.ContainerDependencyCondition.SUCCESS,
-            )
+            ),
+            ecs.ContainerDependency(
+                container=ids_downloader,
+                condition=ecs.ContainerDependencyCondition.SUCCESS,
+            ),
         )
 
         address_waiter = task.add_container(

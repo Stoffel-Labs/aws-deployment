@@ -1,15 +1,21 @@
 networks:
   stoffel:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+          gateway: 172.28.0.1
 
 # Common build + mount config shared by all party containers.
 x-party: &party
   build:
     context: ../StoffelVM
-    dockerfile: Dockerfile.benchmark-flexible
+    dockerfile: Dockerfile.benchmark
+    additional_contexts:
+      coordinator: ../stoffel-mpc-coordinator
   volumes:
     - ../programs:/app/programs:ro
-    - ../ids:/app/ids:ro
+    - ../ids/pub:/app/ids/pub:ro
   cap_add: [NET_ADMIN]
   # Wrapper: apply tc netem rules if NET_LOSS / NET_BANDWIDTH are set,
   # then run the party, and print peak memory on exit.
@@ -24,12 +30,13 @@ x-party: &party
           || echo "WARNING: tc failed — iproute2 may not be installed in the image" >&2
       fi
       /app/entrypoint.sh; EXIT=$$?
+      PARTY_IP=(172.28.0.10 172.28.0.11 172.28.0.12 172.28.0.13 172.28.0.14)
       echo "Pinging coordinator..."
-      ping -c 4 coordinator.stoffel-coord.local || true
+      ping -c 4 172.28.0.5 || true
       for i in $$(seq 0 4); do
         [ "$$i" = "$$STOFFEL_PARTY_ID" ] && continue
         echo "Pinging party$$i..."
-        ping -c 4 party$$i.stoffel-coord.local || true
+        ping -c 4 $${PARTY_IP[$$i]} || true
       done
       MEM=$$(cat /sys/fs/cgroup/memory.peak 2>/dev/null \
           || cat /sys/fs/cgroup/memory/memory.max_usage_in_bytes 2>/dev/null \
@@ -43,12 +50,14 @@ x-party: &party
 # Environment variables shared by all parties.
 x-common-env: &common-env
   STOFFEL_AUTH_TOKEN: "${STOFFEL_AUTH_TOKEN:-}"
+  STOFFEL_EXECUTION_ID: "${STOFFEL_EXECUTION_ID}"
   STOFFEL_N_PARTIES: "5"
   STOFFEL_THRESHOLD: "1"
   STOFFEL_ENTRY: main
-  STOFFEL_COORD_ADDR: "coordinator.stoffel-coord.local:31415"
-#  STOFFEL_EXPECTED_CLIENTS: "/app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt,/app/ids/pub/clients/client2.crt,/app/ids/pub/clients/client3.crt,/app/ids/pub/clients/client4.crt,/app/ids/pub/clients/client5.crt,/app/ids/pub/clients/client6.crt,/app/ids/pub/clients/client7.crt,/app/ids/pub/clients/client8.crt,/app/ids/pub/clients/client9.crt,/app/ids/pub/clients/client10.crt,/app/ids/pub/clients/client11.crt,/app/ids/pub/clients/client12.crt,/app/ids/pub/clients/client13.crt,/app/ids/pub/clients/client14.crt,/app/ids/pub/clients/client15.crt,/app/ids/pub/clients/client16.crt,/app/ids/pub/clients/client17.crt,/app/ids/pub/clients/client18.crt,/app/ids/pub/clients/client19.crt,/app/ids/pub/clients/client20.crt,/app/ids/pub/clients/client21.crt,/app/ids/pub/clients/client22.crt,/app/ids/pub/clients/client23.crt,/app/ids/pub/clients/client24.crt,/app/ids/pub/clients/client25.crt,/app/ids/pub/clients/client26.crt,/app/ids/pub/clients/client27.crt,/app/ids/pub/clients/client28.crt,/app/ids/pub/clients/client29.crt,/app/ids/pub/clients/client30.crt,/app/ids/pub/clients/client31.crt,/app/ids/pub/clients/client32.crt,/app/ids/pub/clients/client33.crt,/app/ids/pub/clients/client34.crt,/app/ids/pub/clients/client35.crt,/app/ids/pub/clients/client36.crt,/app/ids/pub/clients/client37.crt,/app/ids/pub/clients/client38.crt,/app/ids/pub/clients/client39.crt,/app/ids/pub/clients/client40.crt,/app/ids/pub/clients/client41.crt,/app/ids/pub/clients/client42.crt,/app/ids/pub/clients/client43.crt,/app/ids/pub/clients/client44.crt,/app/ids/pub/clients/client45.crt,/app/ids/pub/clients/client46.crt,/app/ids/pub/clients/client47.crt,/app/ids/pub/clients/client48.crt,/app/ids/pub/clients/client49.crt,/app/ids/pub/clients/client50.crt,/app/ids/pub/clients/client51.crt,/app/ids/pub/clients/client52.crt,/app/ids/pub/clients/client53.crt,/app/ids/pub/clients/client54.crt,/app/ids/pub/clients/client55.crt,/app/ids/pub/clients/client56.crt,/app/ids/pub/clients/client57.crt,/app/ids/pub/clients/client58.crt,/app/ids/pub/clients/client59.crt,/app/ids/pub/clients/client60.crt,/app/ids/pub/clients/client61.crt,/app/ids/pub/clients/client62.crt,/app/ids/pub/clients/client63.crt,/app/ids/pub/clients/client64.crt,/app/ids/pub/clients/client65.crt,/app/ids/pub/clients/client66.crt,/app/ids/pub/clients/client67.crt,/app/ids/pub/clients/client68.crt,/app/ids/pub/clients/client69.crt,/app/ids/pub/clients/client70.crt,/app/ids/pub/clients/client71.crt,/app/ids/pub/clients/client72.crt,/app/ids/pub/clients/client73.crt,/app/ids/pub/clients/client74.crt,/app/ids/pub/clients/client75.crt,/app/ids/pub/clients/client76.crt,/app/ids/pub/clients/client77.crt,/app/ids/pub/clients/client78.crt,/app/ids/pub/clients/client79.crt,/app/ids/pub/clients/client80.crt,/app/ids/pub/clients/client81.crt,/app/ids/pub/clients/client82.crt,/app/ids/pub/clients/client83.crt,/app/ids/pub/clients/client84.crt,/app/ids/pub/clients/client85.crt,/app/ids/pub/clients/client86.crt,/app/ids/pub/clients/client87.crt,/app/ids/pub/clients/client88.crt,/app/ids/pub/clients/client89.crt,/app/ids/pub/clients/client90.crt,/app/ids/pub/clients/client91.crt,/app/ids/pub/clients/client92.crt,/app/ids/pub/clients/client93.crt,/app/ids/pub/clients/client94.crt,/app/ids/pub/clients/client95.crt,/app/ids/pub/clients/client96.crt,/app/ids/pub/clients/client97.crt,/app/ids/pub/clients/client98.crt,/app/ids/pub/clients/client99.crt,/app/ids/pub/clients/client100.crt,/app/ids/pub/clients/client101.crt,/app/ids/pub/clients/client102.crt,/app/ids/pub/clients/client103.crt,/app/ids/pub/clients/client104.crt,/app/ids/pub/clients/client105.crt,/app/ids/pub/clients/client106.crt,/app/ids/pub/clients/client107.crt,/app/ids/pub/clients/client108.crt,/app/ids/pub/clients/client109.crt,/app/ids/pub/clients/client110.crt,/app/ids/pub/clients/client111.crt,/app/ids/pub/clients/client112.crt,/app/ids/pub/clients/client113.crt,/app/ids/pub/clients/client114.crt,/app/ids/pub/clients/client115.crt,/app/ids/pub/clients/client116.crt,/app/ids/pub/clients/client117.crt,/app/ids/pub/clients/client118.crt,/app/ids/pub/clients/client119.crt,/app/ids/pub/clients/client120.crt,/app/ids/pub/clients/client121.crt,/app/ids/pub/clients/client122.crt,/app/ids/pub/clients/client123.crt,/app/ids/pub/clients/client124.crt,/app/ids/pub/clients/client125.crt,/app/ids/pub/clients/client126.crt,/app/ids/pub/clients/client127.crt,/app/ids/pub/clients/client128.crt,/app/ids/pub/clients/client129.crt,/app/ids/pub/clients/client130.crt,/app/ids/pub/clients/client131.crt,/app/ids/pub/clients/client132.crt,/app/ids/pub/clients/client133.crt,/app/ids/pub/clients/client134.crt,/app/ids/pub/clients/client135.crt,/app/ids/pub/clients/client136.crt,/app/ids/pub/clients/client137.crt,/app/ids/pub/clients/client138.crt,/app/ids/pub/clients/client139.crt,/app/ids/pub/clients/client140.crt,/app/ids/pub/clients/client141.crt,/app/ids/pub/clients/client142.crt,/app/ids/pub/clients/client143.crt,/app/ids/pub/clients/client144.crt,/app/ids/pub/clients/client145.crt,/app/ids/pub/clients/client146.crt,/app/ids/pub/clients/client147.crt,/app/ids/pub/clients/client148.crt,/app/ids/pub/clients/client149.crt,/app/ids/pub/clients/client150.crt,/app/ids/pub/clients/client151.crt,/app/ids/pub/clients/client152.crt,/app/ids/pub/clients/client153.crt,/app/ids/pub/clients/client154.crt,/app/ids/pub/clients/client155.crt,/app/ids/pub/clients/client156.crt,/app/ids/pub/clients/client157.crt,/app/ids/pub/clients/client158.crt,/app/ids/pub/clients/client159.crt,/app/ids/pub/clients/client160.crt,/app/ids/pub/clients/client161.crt,/app/ids/pub/clients/client162.crt,/app/ids/pub/clients/client163.crt,/app/ids/pub/clients/client164.crt,/app/ids/pub/clients/client165.crt,/app/ids/pub/clients/client166.crt,/app/ids/pub/clients/client167.crt,/app/ids/pub/clients/client168.crt,/app/ids/pub/clients/client169.crt,/app/ids/pub/clients/client170.crt,/app/ids/pub/clients/client171.crt,/app/ids/pub/clients/client172.crt,/app/ids/pub/clients/client173.crt,/app/ids/pub/clients/client174.crt,/app/ids/pub/clients/client175.crt,/app/ids/pub/clients/client176.crt,/app/ids/pub/clients/client177.crt,/app/ids/pub/clients/client178.crt,/app/ids/pub/clients/client179.crt,/app/ids/pub/clients/client180.crt,/app/ids/pub/clients/client181.crt,/app/ids/pub/clients/client182.crt,/app/ids/pub/clients/client183.crt,/app/ids/pub/clients/client184.crt,/app/ids/pub/clients/client185.crt,/app/ids/pub/clients/client186.crt,/app/ids/pub/clients/client187.crt,/app/ids/pub/clients/client188.crt,/app/ids/pub/clients/client189.crt,/app/ids/pub/clients/client190.crt,/app/ids/pub/clients/client191.crt,/app/ids/pub/clients/client192.crt,/app/ids/pub/clients/client193.crt,/app/ids/pub/clients/client194.crt,/app/ids/pub/clients/client195.crt,/app/ids/pub/clients/client196.crt,/app/ids/pub/clients/client197.crt,/app/ids/pub/clients/client198.crt,/app/ids/pub/clients/client199.crt,/app/ids/pub/clients/client200.crt,/app/ids/pub/clients/client201.crt,/app/ids/pub/clients/client202.crt,/app/ids/pub/clients/client203.crt,/app/ids/pub/clients/client204.crt,/app/ids/pub/clients/client205.crt,/app/ids/pub/clients/client206.crt,/app/ids/pub/clients/client207.crt,/app/ids/pub/clients/client208.crt,/app/ids/pub/clients/client209.crt,/app/ids/pub/clients/client210.crt,/app/ids/pub/clients/client211.crt,/app/ids/pub/clients/client212.crt,/app/ids/pub/clients/client213.crt,/app/ids/pub/clients/client214.crt,/app/ids/pub/clients/client215.crt,/app/ids/pub/clients/client216.crt,/app/ids/pub/clients/client217.crt,/app/ids/pub/clients/client218.crt,/app/ids/pub/clients/client219.crt,/app/ids/pub/clients/client220.crt,/app/ids/pub/clients/client221.crt,/app/ids/pub/clients/client222.crt,/app/ids/pub/clients/client223.crt,/app/ids/pub/clients/client224.crt,/app/ids/pub/clients/client225.crt,/app/ids/pub/clients/client226.crt,/app/ids/pub/clients/client227.crt,/app/ids/pub/clients/client228.crt,/app/ids/pub/clients/client229.crt,/app/ids/pub/clients/client230.crt,/app/ids/pub/clients/client231.crt,/app/ids/pub/clients/client232.crt,/app/ids/pub/clients/client233.crt,/app/ids/pub/clients/client234.crt,/app/ids/pub/clients/client235.crt,/app/ids/pub/clients/client236.crt,/app/ids/pub/clients/client237.crt,/app/ids/pub/clients/client238.crt,/app/ids/pub/clients/client239.crt,/app/ids/pub/clients/client240.crt,/app/ids/pub/clients/client241.crt,/app/ids/pub/clients/client242.crt,/app/ids/pub/clients/client243.crt,/app/ids/pub/clients/client244.crt,/app/ids/pub/clients/client245.crt,/app/ids/pub/clients/client246.crt,/app/ids/pub/clients/client247.crt,/app/ids/pub/clients/client248.crt,/app/ids/pub/clients/client249.crt,/app/ids/pub/clients/client250.crt,/app/ids/pub/clients/client251.crt,/app/ids/pub/clients/client252.crt,/app/ids/pub/clients/client253.crt,/app/ids/pub/clients/client254.crt,/app/ids/pub/clients/client255.crt,/app/ids/pub/clients/client256.crt,/app/ids/pub/clients/client257.crt,/app/ids/pub/clients/client258.crt,/app/ids/pub/clients/client259.crt,/app/ids/pub/clients/client260.crt,/app/ids/pub/clients/client261.crt,/app/ids/pub/clients/client262.crt,/app/ids/pub/clients/client263.crt,/app/ids/pub/clients/client264.crt,/app/ids/pub/clients/client265.crt,/app/ids/pub/clients/client266.crt,/app/ids/pub/clients/client267.crt,/app/ids/pub/clients/client268.crt,/app/ids/pub/clients/client269.crt,/app/ids/pub/clients/client270.crt,/app/ids/pub/clients/client271.crt,/app/ids/pub/clients/client272.crt,/app/ids/pub/clients/client273.crt,/app/ids/pub/clients/client274.crt,/app/ids/pub/clients/client275.crt,/app/ids/pub/clients/client276.crt,/app/ids/pub/clients/client277.crt,/app/ids/pub/clients/client278.crt,/app/ids/pub/clients/client279.crt,/app/ids/pub/clients/client280.crt,/app/ids/pub/clients/client281.crt,/app/ids/pub/clients/client282.crt,/app/ids/pub/clients/client283.crt,/app/ids/pub/clients/client284.crt,/app/ids/pub/clients/client285.crt,/app/ids/pub/clients/client286.crt,/app/ids/pub/clients/client287.crt,/app/ids/pub/clients/client288.crt,/app/ids/pub/clients/client289.crt,/app/ids/pub/clients/client290.crt,/app/ids/pub/clients/client291.crt,/app/ids/pub/clients/client292.crt,/app/ids/pub/clients/client293.crt,/app/ids/pub/clients/client294.crt,/app/ids/pub/clients/client295.crt,/app/ids/pub/clients/client296.crt,/app/ids/pub/clients/client297.crt,/app/ids/pub/clients/client298.crt,/app/ids/pub/clients/client299.crt,/app/ids/pub/clients/client300.crt,/app/ids/pub/clients/client301.crt,/app/ids/pub/clients/client302.crt,/app/ids/pub/clients/client303.crt,/app/ids/pub/clients/client304.crt,/app/ids/pub/clients/client305.crt,/app/ids/pub/clients/client306.crt,/app/ids/pub/clients/client307.crt,/app/ids/pub/clients/client308.crt,/app/ids/pub/clients/client309.crt,/app/ids/pub/clients/client310.crt,/app/ids/pub/clients/client311.crt,/app/ids/pub/clients/client312.crt,/app/ids/pub/clients/client313.crt,/app/ids/pub/clients/client314.crt,/app/ids/pub/clients/client315.crt,/app/ids/pub/clients/client316.crt,/app/ids/pub/clients/client317.crt,/app/ids/pub/clients/client318.crt,/app/ids/pub/clients/client319.crt,/app/ids/pub/clients/client320.crt,/app/ids/pub/clients/client321.crt,/app/ids/pub/clients/client322.crt,/app/ids/pub/clients/client323.crt,/app/ids/pub/clients/client324.crt,/app/ids/pub/clients/client325.crt,/app/ids/pub/clients/client326.crt,/app/ids/pub/clients/client327.crt,/app/ids/pub/clients/client328.crt,/app/ids/pub/clients/client329.crt,/app/ids/pub/clients/client330.crt,/app/ids/pub/clients/client331.crt,/app/ids/pub/clients/client332.crt,/app/ids/pub/clients/client333.crt,/app/ids/pub/clients/client334.crt,/app/ids/pub/clients/client335.crt,/app/ids/pub/clients/client336.crt,/app/ids/pub/clients/client337.crt,/app/ids/pub/clients/client338.crt,/app/ids/pub/clients/client339.crt,/app/ids/pub/clients/client340.crt,/app/ids/pub/clients/client341.crt,/app/ids/pub/clients/client342.crt,/app/ids/pub/clients/client343.crt,/app/ids/pub/clients/client344.crt,/app/ids/pub/clients/client345.crt,/app/ids/pub/clients/client346.crt,/app/ids/pub/clients/client347.crt,/app/ids/pub/clients/client348.crt,/app/ids/pub/clients/client349.crt,/app/ids/pub/clients/client350.crt,/app/ids/pub/clients/client351.crt,/app/ids/pub/clients/client352.crt,/app/ids/pub/clients/client353.crt,/app/ids/pub/clients/client354.crt,/app/ids/pub/clients/client355.crt,/app/ids/pub/clients/client356.crt,/app/ids/pub/clients/client357.crt,/app/ids/pub/clients/client358.crt,/app/ids/pub/clients/client359.crt,/app/ids/pub/clients/client360.crt,/app/ids/pub/clients/client361.crt,/app/ids/pub/clients/client362.crt,/app/ids/pub/clients/client363.crt,/app/ids/pub/clients/client364.crt,/app/ids/pub/clients/client365.crt,/app/ids/pub/clients/client366.crt,/app/ids/pub/clients/client367.crt,/app/ids/pub/clients/client368.crt,/app/ids/pub/clients/client369.crt,/app/ids/pub/clients/client370.crt,/app/ids/pub/clients/client371.crt,/app/ids/pub/clients/client372.crt,/app/ids/pub/clients/client373.crt,/app/ids/pub/clients/client374.crt,/app/ids/pub/clients/client375.crt,/app/ids/pub/clients/client376.crt,/app/ids/pub/clients/client377.crt,/app/ids/pub/clients/client378.crt,/app/ids/pub/clients/client379.crt,/app/ids/pub/clients/client380.crt,/app/ids/pub/clients/client381.crt,/app/ids/pub/clients/client382.crt,/app/ids/pub/clients/client383.crt,/app/ids/pub/clients/client384.crt,/app/ids/pub/clients/client385.crt,/app/ids/pub/clients/client386.crt,/app/ids/pub/clients/client387.crt,/app/ids/pub/clients/client388.crt,/app/ids/pub/clients/client389.crt,/app/ids/pub/clients/client390.crt,/app/ids/pub/clients/client391.crt,/app/ids/pub/clients/client392.crt,/app/ids/pub/clients/client393.crt,/app/ids/pub/clients/client394.crt,/app/ids/pub/clients/client395.crt,/app/ids/pub/clients/client396.crt,/app/ids/pub/clients/client397.crt,/app/ids/pub/clients/client398.crt,/app/ids/pub/clients/client399.crt,/app/ids/pub/clients/client400.crt,/app/ids/pub/clients/client401.crt,/app/ids/pub/clients/client402.crt,/app/ids/pub/clients/client403.crt,/app/ids/pub/clients/client404.crt,/app/ids/pub/clients/client405.crt,/app/ids/pub/clients/client406.crt,/app/ids/pub/clients/client407.crt,/app/ids/pub/clients/client408.crt,/app/ids/pub/clients/client409.crt,/app/ids/pub/clients/client410.crt,/app/ids/pub/clients/client411.crt,/app/ids/pub/clients/client412.crt,/app/ids/pub/clients/client413.crt,/app/ids/pub/clients/client414.crt,/app/ids/pub/clients/client415.crt,/app/ids/pub/clients/client416.crt,/app/ids/pub/clients/client417.crt,/app/ids/pub/clients/client418.crt,/app/ids/pub/clients/client419.crt,/app/ids/pub/clients/client420.crt,/app/ids/pub/clients/client421.crt,/app/ids/pub/clients/client422.crt,/app/ids/pub/clients/client423.crt,/app/ids/pub/clients/client424.crt,/app/ids/pub/clients/client425.crt,/app/ids/pub/clients/client426.crt,/app/ids/pub/clients/client427.crt,/app/ids/pub/clients/client428.crt,/app/ids/pub/clients/client429.crt,/app/ids/pub/clients/client430.crt,/app/ids/pub/clients/client431.crt,/app/ids/pub/clients/client432.crt,/app/ids/pub/clients/client433.crt,/app/ids/pub/clients/client434.crt,/app/ids/pub/clients/client435.crt,/app/ids/pub/clients/client436.crt,/app/ids/pub/clients/client437.crt,/app/ids/pub/clients/client438.crt,/app/ids/pub/clients/client439.crt,/app/ids/pub/clients/client440.crt,/app/ids/pub/clients/client441.crt,/app/ids/pub/clients/client442.crt,/app/ids/pub/clients/client443.crt,/app/ids/pub/clients/client444.crt,/app/ids/pub/clients/client445.crt,/app/ids/pub/clients/client446.crt,/app/ids/pub/clients/client447.crt,/app/ids/pub/clients/client448.crt,/app/ids/pub/clients/client449.crt,/app/ids/pub/clients/client450.crt,/app/ids/pub/clients/client451.crt,/app/ids/pub/clients/client452.crt,/app/ids/pub/clients/client453.crt,/app/ids/pub/clients/client454.crt,/app/ids/pub/clients/client455.crt,/app/ids/pub/clients/client456.crt,/app/ids/pub/clients/client457.crt,/app/ids/pub/clients/client458.crt,/app/ids/pub/clients/client459.crt,/app/ids/pub/clients/client460.crt,/app/ids/pub/clients/client461.crt,/app/ids/pub/clients/client462.crt,/app/ids/pub/clients/client463.crt,/app/ids/pub/clients/client464.crt,/app/ids/pub/clients/client465.crt,/app/ids/pub/clients/client466.crt,/app/ids/pub/clients/client467.crt,/app/ids/pub/clients/client468.crt,/app/ids/pub/clients/client469.crt,/app/ids/pub/clients/client470.crt,/app/ids/pub/clients/client471.crt,/app/ids/pub/clients/client472.crt,/app/ids/pub/clients/client473.crt,/app/ids/pub/clients/client474.crt,/app/ids/pub/clients/client475.crt,/app/ids/pub/clients/client476.crt,/app/ids/pub/clients/client477.crt,/app/ids/pub/clients/client478.crt,/app/ids/pub/clients/client479.crt,/app/ids/pub/clients/client480.crt,/app/ids/pub/clients/client481.crt,/app/ids/pub/clients/client482.crt,/app/ids/pub/clients/client483.crt,/app/ids/pub/clients/client484.crt,/app/ids/pub/clients/client485.crt,/app/ids/pub/clients/client486.crt,/app/ids/pub/clients/client487.crt,/app/ids/pub/clients/client488.crt,/app/ids/pub/clients/client489.crt,/app/ids/pub/clients/client490.crt,/app/ids/pub/clients/client491.crt,/app/ids/pub/clients/client492.crt,/app/ids/pub/clients/client493.crt,/app/ids/pub/clients/client494.crt,/app/ids/pub/clients/client495.crt,/app/ids/pub/clients/client496.crt,/app/ids/pub/clients/client497.crt,/app/ids/pub/clients/client498.crt,/app/ids/pub/clients/client499.crt,/app/ids/pub/clients/client500.crt,/app/ids/pub/clients/client501.crt,/app/ids/pub/clients/client502.crt,/app/ids/pub/clients/client503.crt,/app/ids/pub/clients/client504.crt,/app/ids/pub/clients/client505.crt,/app/ids/pub/clients/client506.crt,/app/ids/pub/clients/client507.crt,/app/ids/pub/clients/client508.crt,/app/ids/pub/clients/client509.crt,/app/ids/pub/clients/client510.crt,/app/ids/pub/clients/client511.crt"
+  STOFFEL_COORD_ADDR: "172.28.0.5:31415"
+  STOFFEL_EXPECTED_CLIENTS: "${STOFFEL_EXPECTED_CLIENTS:-}"
   STOFFEL_PROGRAM: "${STOFFEL_PROGRAM}"
+  STOFFEL_PERSISTENT_RUNS: "${STOFFEL_PERSISTENT_RUNS:-}"
   STOFFEL_MPC_BACKEND: ${STOFFEL_MPC_BACKEND:-honeybadger}
   STOFFEL_MPC_CURVE: ${STOFFEL_MPC_CURVE:-bls12-381}
   RUST_MIN_STACK: ${RUST_MIN_STACK:-67108864}
@@ -56,7 +65,6 @@ x-common-env: &common-env
   RUST_BACKTRACE: "1"
   NET_LOSS: "${NET_LOSS:-}"
   NET_BANDWIDTH: "${NET_BANDWIDTH:-}"
-  STOFFEL_CLIENT_INPUT_TOTAL: "${STOFFEL_CLIENT_INPUT_TOTAL:-}"
   STOFFEL_WAIT_FOR_CLIENTS: "${STOFFEL_WAIT_FOR_CLIENTS:-}"
   STOFFEL_SKIP_HOST_WAIT: "true"
 
@@ -66,7 +74,9 @@ services:
       context: ../stoffel-mpc-coordinator
       dockerfile: Dockerfile.benchmark
     volumes:
-      - ../ids:/app/ids:ro
+      - ../programs:/app/programs:ro
+      - ../ids/pub:/app/ids/pub:ro
+      - ../ids/priv/coord.der:/app/ids/priv/coord.der:ro
     # Wrapper: run the coordinator binary, then (once it exits) ping
     # every party for RTT measurement. "run-coord" is a $0 placeholder
     # so that the args below land in "$$@" starting at $$1.
@@ -74,9 +84,10 @@ services:
     command:
       - |
         /app/run-coord "$$@"; EXIT=$$?
+        PARTY_IP=(172.28.0.10 172.28.0.11 172.28.0.12 172.28.0.13 172.28.0.14)
         for i in $$(seq 0 4); do
           echo "Pinging party$$i..."
-          ping -c 4 party$$i.stoffel-coord.local || true
+          ping -c 4 $${PARTY_IP[$$i]} || true
         done
         exit $$EXIT
       - run-coord
@@ -92,12 +103,10 @@ services:
       - "5"
       - --t
       - "1"
-      - --n-inputs
-      - "${STOFFEL_CLIENT_INPUT_TOTAL:-0}"
-      - --backend
-      - ${STOFFEL_MPC_BACKEND:-honeybadger}
+      - --program
+      - "${STOFFEL_PROGRAM}"
       - --output-clients
-      - "/app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt,/app/ids/pub/clients/client2.crt,/app/ids/pub/clients/client3.crt,/app/ids/pub/clients/client4.crt,/app/ids/pub/clients/client5.crt,/app/ids/pub/clients/client6.crt,/app/ids/pub/clients/client7.crt,/app/ids/pub/clients/client8.crt,/app/ids/pub/clients/client9.crt,/app/ids/pub/clients/client10.crt,/app/ids/pub/clients/client11.crt,/app/ids/pub/clients/client12.crt,/app/ids/pub/clients/client13.crt,/app/ids/pub/clients/client14.crt,/app/ids/pub/clients/client15.crt,/app/ids/pub/clients/client16.crt,/app/ids/pub/clients/client17.crt,/app/ids/pub/clients/client18.crt,/app/ids/pub/clients/client19.crt,/app/ids/pub/clients/client20.crt,/app/ids/pub/clients/client21.crt,/app/ids/pub/clients/client22.crt,/app/ids/pub/clients/client23.crt,/app/ids/pub/clients/client24.crt,/app/ids/pub/clients/client25.crt,/app/ids/pub/clients/client26.crt,/app/ids/pub/clients/client27.crt,/app/ids/pub/clients/client28.crt,/app/ids/pub/clients/client29.crt,/app/ids/pub/clients/client30.crt,/app/ids/pub/clients/client31.crt,/app/ids/pub/clients/client32.crt,/app/ids/pub/clients/client33.crt,/app/ids/pub/clients/client34.crt,/app/ids/pub/clients/client35.crt,/app/ids/pub/clients/client36.crt,/app/ids/pub/clients/client37.crt,/app/ids/pub/clients/client38.crt,/app/ids/pub/clients/client39.crt,/app/ids/pub/clients/client40.crt,/app/ids/pub/clients/client41.crt,/app/ids/pub/clients/client42.crt,/app/ids/pub/clients/client43.crt,/app/ids/pub/clients/client44.crt,/app/ids/pub/clients/client45.crt,/app/ids/pub/clients/client46.crt,/app/ids/pub/clients/client47.crt,/app/ids/pub/clients/client48.crt,/app/ids/pub/clients/client49.crt,/app/ids/pub/clients/client50.crt,/app/ids/pub/clients/client51.crt,/app/ids/pub/clients/client52.crt,/app/ids/pub/clients/client53.crt,/app/ids/pub/clients/client54.crt,/app/ids/pub/clients/client55.crt,/app/ids/pub/clients/client56.crt,/app/ids/pub/clients/client57.crt,/app/ids/pub/clients/client58.crt,/app/ids/pub/clients/client59.crt,/app/ids/pub/clients/client60.crt,/app/ids/pub/clients/client61.crt,/app/ids/pub/clients/client62.crt,/app/ids/pub/clients/client63.crt,/app/ids/pub/clients/client64.crt,/app/ids/pub/clients/client65.crt,/app/ids/pub/clients/client66.crt,/app/ids/pub/clients/client67.crt,/app/ids/pub/clients/client68.crt,/app/ids/pub/clients/client69.crt,/app/ids/pub/clients/client70.crt,/app/ids/pub/clients/client71.crt,/app/ids/pub/clients/client72.crt,/app/ids/pub/clients/client73.crt,/app/ids/pub/clients/client74.crt,/app/ids/pub/clients/client75.crt,/app/ids/pub/clients/client76.crt,/app/ids/pub/clients/client77.crt,/app/ids/pub/clients/client78.crt,/app/ids/pub/clients/client79.crt,/app/ids/pub/clients/client80.crt,/app/ids/pub/clients/client81.crt,/app/ids/pub/clients/client82.crt,/app/ids/pub/clients/client83.crt,/app/ids/pub/clients/client84.crt,/app/ids/pub/clients/client85.crt,/app/ids/pub/clients/client86.crt,/app/ids/pub/clients/client87.crt,/app/ids/pub/clients/client88.crt,/app/ids/pub/clients/client89.crt,/app/ids/pub/clients/client90.crt,/app/ids/pub/clients/client91.crt,/app/ids/pub/clients/client92.crt,/app/ids/pub/clients/client93.crt,/app/ids/pub/clients/client94.crt,/app/ids/pub/clients/client95.crt,/app/ids/pub/clients/client96.crt,/app/ids/pub/clients/client97.crt,/app/ids/pub/clients/client98.crt,/app/ids/pub/clients/client99.crt,/app/ids/pub/clients/client100.crt,/app/ids/pub/clients/client101.crt,/app/ids/pub/clients/client102.crt,/app/ids/pub/clients/client103.crt,/app/ids/pub/clients/client104.crt,/app/ids/pub/clients/client105.crt,/app/ids/pub/clients/client106.crt,/app/ids/pub/clients/client107.crt,/app/ids/pub/clients/client108.crt,/app/ids/pub/clients/client109.crt,/app/ids/pub/clients/client110.crt,/app/ids/pub/clients/client111.crt,/app/ids/pub/clients/client112.crt,/app/ids/pub/clients/client113.crt,/app/ids/pub/clients/client114.crt,/app/ids/pub/clients/client115.crt,/app/ids/pub/clients/client116.crt,/app/ids/pub/clients/client117.crt,/app/ids/pub/clients/client118.crt,/app/ids/pub/clients/client119.crt,/app/ids/pub/clients/client120.crt,/app/ids/pub/clients/client121.crt,/app/ids/pub/clients/client122.crt,/app/ids/pub/clients/client123.crt,/app/ids/pub/clients/client124.crt,/app/ids/pub/clients/client125.crt,/app/ids/pub/clients/client126.crt,/app/ids/pub/clients/client127.crt,/app/ids/pub/clients/client128.crt,/app/ids/pub/clients/client129.crt,/app/ids/pub/clients/client130.crt,/app/ids/pub/clients/client131.crt,/app/ids/pub/clients/client132.crt,/app/ids/pub/clients/client133.crt,/app/ids/pub/clients/client134.crt,/app/ids/pub/clients/client135.crt,/app/ids/pub/clients/client136.crt,/app/ids/pub/clients/client137.crt,/app/ids/pub/clients/client138.crt,/app/ids/pub/clients/client139.crt,/app/ids/pub/clients/client140.crt,/app/ids/pub/clients/client141.crt,/app/ids/pub/clients/client142.crt,/app/ids/pub/clients/client143.crt,/app/ids/pub/clients/client144.crt,/app/ids/pub/clients/client145.crt,/app/ids/pub/clients/client146.crt,/app/ids/pub/clients/client147.crt,/app/ids/pub/clients/client148.crt,/app/ids/pub/clients/client149.crt,/app/ids/pub/clients/client150.crt,/app/ids/pub/clients/client151.crt,/app/ids/pub/clients/client152.crt,/app/ids/pub/clients/client153.crt,/app/ids/pub/clients/client154.crt,/app/ids/pub/clients/client155.crt,/app/ids/pub/clients/client156.crt,/app/ids/pub/clients/client157.crt,/app/ids/pub/clients/client158.crt,/app/ids/pub/clients/client159.crt,/app/ids/pub/clients/client160.crt,/app/ids/pub/clients/client161.crt,/app/ids/pub/clients/client162.crt,/app/ids/pub/clients/client163.crt,/app/ids/pub/clients/client164.crt,/app/ids/pub/clients/client165.crt,/app/ids/pub/clients/client166.crt,/app/ids/pub/clients/client167.crt,/app/ids/pub/clients/client168.crt,/app/ids/pub/clients/client169.crt,/app/ids/pub/clients/client170.crt,/app/ids/pub/clients/client171.crt,/app/ids/pub/clients/client172.crt,/app/ids/pub/clients/client173.crt,/app/ids/pub/clients/client174.crt,/app/ids/pub/clients/client175.crt,/app/ids/pub/clients/client176.crt,/app/ids/pub/clients/client177.crt,/app/ids/pub/clients/client178.crt,/app/ids/pub/clients/client179.crt,/app/ids/pub/clients/client180.crt,/app/ids/pub/clients/client181.crt,/app/ids/pub/clients/client182.crt,/app/ids/pub/clients/client183.crt,/app/ids/pub/clients/client184.crt,/app/ids/pub/clients/client185.crt,/app/ids/pub/clients/client186.crt,/app/ids/pub/clients/client187.crt,/app/ids/pub/clients/client188.crt,/app/ids/pub/clients/client189.crt,/app/ids/pub/clients/client190.crt,/app/ids/pub/clients/client191.crt,/app/ids/pub/clients/client192.crt,/app/ids/pub/clients/client193.crt,/app/ids/pub/clients/client194.crt,/app/ids/pub/clients/client195.crt,/app/ids/pub/clients/client196.crt,/app/ids/pub/clients/client197.crt,/app/ids/pub/clients/client198.crt,/app/ids/pub/clients/client199.crt,/app/ids/pub/clients/client200.crt,/app/ids/pub/clients/client201.crt,/app/ids/pub/clients/client202.crt,/app/ids/pub/clients/client203.crt,/app/ids/pub/clients/client204.crt,/app/ids/pub/clients/client205.crt,/app/ids/pub/clients/client206.crt,/app/ids/pub/clients/client207.crt,/app/ids/pub/clients/client208.crt,/app/ids/pub/clients/client209.crt,/app/ids/pub/clients/client210.crt,/app/ids/pub/clients/client211.crt,/app/ids/pub/clients/client212.crt,/app/ids/pub/clients/client213.crt,/app/ids/pub/clients/client214.crt,/app/ids/pub/clients/client215.crt,/app/ids/pub/clients/client216.crt,/app/ids/pub/clients/client217.crt,/app/ids/pub/clients/client218.crt,/app/ids/pub/clients/client219.crt,/app/ids/pub/clients/client220.crt,/app/ids/pub/clients/client221.crt,/app/ids/pub/clients/client222.crt,/app/ids/pub/clients/client223.crt,/app/ids/pub/clients/client224.crt,/app/ids/pub/clients/client225.crt,/app/ids/pub/clients/client226.crt,/app/ids/pub/clients/client227.crt,/app/ids/pub/clients/client228.crt,/app/ids/pub/clients/client229.crt,/app/ids/pub/clients/client230.crt,/app/ids/pub/clients/client231.crt,/app/ids/pub/clients/client232.crt,/app/ids/pub/clients/client233.crt,/app/ids/pub/clients/client234.crt,/app/ids/pub/clients/client235.crt,/app/ids/pub/clients/client236.crt,/app/ids/pub/clients/client237.crt,/app/ids/pub/clients/client238.crt,/app/ids/pub/clients/client239.crt,/app/ids/pub/clients/client240.crt,/app/ids/pub/clients/client241.crt,/app/ids/pub/clients/client242.crt,/app/ids/pub/clients/client243.crt,/app/ids/pub/clients/client244.crt,/app/ids/pub/clients/client245.crt,/app/ids/pub/clients/client246.crt,/app/ids/pub/clients/client247.crt,/app/ids/pub/clients/client248.crt,/app/ids/pub/clients/client249.crt,/app/ids/pub/clients/client250.crt,/app/ids/pub/clients/client251.crt,/app/ids/pub/clients/client252.crt,/app/ids/pub/clients/client253.crt,/app/ids/pub/clients/client254.crt,/app/ids/pub/clients/client255.crt,/app/ids/pub/clients/client256.crt,/app/ids/pub/clients/client257.crt,/app/ids/pub/clients/client258.crt,/app/ids/pub/clients/client259.crt,/app/ids/pub/clients/client260.crt,/app/ids/pub/clients/client261.crt,/app/ids/pub/clients/client262.crt,/app/ids/pub/clients/client263.crt,/app/ids/pub/clients/client264.crt,/app/ids/pub/clients/client265.crt,/app/ids/pub/clients/client266.crt,/app/ids/pub/clients/client267.crt,/app/ids/pub/clients/client268.crt,/app/ids/pub/clients/client269.crt,/app/ids/pub/clients/client270.crt,/app/ids/pub/clients/client271.crt,/app/ids/pub/clients/client272.crt,/app/ids/pub/clients/client273.crt,/app/ids/pub/clients/client274.crt,/app/ids/pub/clients/client275.crt,/app/ids/pub/clients/client276.crt,/app/ids/pub/clients/client277.crt,/app/ids/pub/clients/client278.crt,/app/ids/pub/clients/client279.crt,/app/ids/pub/clients/client280.crt,/app/ids/pub/clients/client281.crt,/app/ids/pub/clients/client282.crt,/app/ids/pub/clients/client283.crt,/app/ids/pub/clients/client284.crt,/app/ids/pub/clients/client285.crt,/app/ids/pub/clients/client286.crt,/app/ids/pub/clients/client287.crt,/app/ids/pub/clients/client288.crt,/app/ids/pub/clients/client289.crt,/app/ids/pub/clients/client290.crt,/app/ids/pub/clients/client291.crt,/app/ids/pub/clients/client292.crt,/app/ids/pub/clients/client293.crt,/app/ids/pub/clients/client294.crt,/app/ids/pub/clients/client295.crt,/app/ids/pub/clients/client296.crt,/app/ids/pub/clients/client297.crt,/app/ids/pub/clients/client298.crt,/app/ids/pub/clients/client299.crt,/app/ids/pub/clients/client300.crt,/app/ids/pub/clients/client301.crt,/app/ids/pub/clients/client302.crt,/app/ids/pub/clients/client303.crt,/app/ids/pub/clients/client304.crt,/app/ids/pub/clients/client305.crt,/app/ids/pub/clients/client306.crt,/app/ids/pub/clients/client307.crt,/app/ids/pub/clients/client308.crt,/app/ids/pub/clients/client309.crt,/app/ids/pub/clients/client310.crt,/app/ids/pub/clients/client311.crt,/app/ids/pub/clients/client312.crt,/app/ids/pub/clients/client313.crt,/app/ids/pub/clients/client314.crt,/app/ids/pub/clients/client315.crt,/app/ids/pub/clients/client316.crt,/app/ids/pub/clients/client317.crt,/app/ids/pub/clients/client318.crt,/app/ids/pub/clients/client319.crt,/app/ids/pub/clients/client320.crt,/app/ids/pub/clients/client321.crt,/app/ids/pub/clients/client322.crt,/app/ids/pub/clients/client323.crt,/app/ids/pub/clients/client324.crt,/app/ids/pub/clients/client325.crt,/app/ids/pub/clients/client326.crt,/app/ids/pub/clients/client327.crt,/app/ids/pub/clients/client328.crt,/app/ids/pub/clients/client329.crt,/app/ids/pub/clients/client330.crt,/app/ids/pub/clients/client331.crt,/app/ids/pub/clients/client332.crt,/app/ids/pub/clients/client333.crt,/app/ids/pub/clients/client334.crt,/app/ids/pub/clients/client335.crt,/app/ids/pub/clients/client336.crt,/app/ids/pub/clients/client337.crt,/app/ids/pub/clients/client338.crt,/app/ids/pub/clients/client339.crt,/app/ids/pub/clients/client340.crt,/app/ids/pub/clients/client341.crt,/app/ids/pub/clients/client342.crt,/app/ids/pub/clients/client343.crt,/app/ids/pub/clients/client344.crt,/app/ids/pub/clients/client345.crt,/app/ids/pub/clients/client346.crt,/app/ids/pub/clients/client347.crt,/app/ids/pub/clients/client348.crt,/app/ids/pub/clients/client349.crt,/app/ids/pub/clients/client350.crt,/app/ids/pub/clients/client351.crt,/app/ids/pub/clients/client352.crt,/app/ids/pub/clients/client353.crt,/app/ids/pub/clients/client354.crt,/app/ids/pub/clients/client355.crt,/app/ids/pub/clients/client356.crt,/app/ids/pub/clients/client357.crt,/app/ids/pub/clients/client358.crt,/app/ids/pub/clients/client359.crt,/app/ids/pub/clients/client360.crt,/app/ids/pub/clients/client361.crt,/app/ids/pub/clients/client362.crt,/app/ids/pub/clients/client363.crt,/app/ids/pub/clients/client364.crt,/app/ids/pub/clients/client365.crt,/app/ids/pub/clients/client366.crt,/app/ids/pub/clients/client367.crt,/app/ids/pub/clients/client368.crt,/app/ids/pub/clients/client369.crt,/app/ids/pub/clients/client370.crt,/app/ids/pub/clients/client371.crt,/app/ids/pub/clients/client372.crt,/app/ids/pub/clients/client373.crt,/app/ids/pub/clients/client374.crt,/app/ids/pub/clients/client375.crt,/app/ids/pub/clients/client376.crt,/app/ids/pub/clients/client377.crt,/app/ids/pub/clients/client378.crt,/app/ids/pub/clients/client379.crt,/app/ids/pub/clients/client380.crt,/app/ids/pub/clients/client381.crt,/app/ids/pub/clients/client382.crt,/app/ids/pub/clients/client383.crt,/app/ids/pub/clients/client384.crt,/app/ids/pub/clients/client385.crt,/app/ids/pub/clients/client386.crt,/app/ids/pub/clients/client387.crt,/app/ids/pub/clients/client388.crt,/app/ids/pub/clients/client389.crt,/app/ids/pub/clients/client390.crt,/app/ids/pub/clients/client391.crt,/app/ids/pub/clients/client392.crt,/app/ids/pub/clients/client393.crt,/app/ids/pub/clients/client394.crt,/app/ids/pub/clients/client395.crt,/app/ids/pub/clients/client396.crt,/app/ids/pub/clients/client397.crt,/app/ids/pub/clients/client398.crt,/app/ids/pub/clients/client399.crt,/app/ids/pub/clients/client400.crt,/app/ids/pub/clients/client401.crt,/app/ids/pub/clients/client402.crt,/app/ids/pub/clients/client403.crt,/app/ids/pub/clients/client404.crt,/app/ids/pub/clients/client405.crt,/app/ids/pub/clients/client406.crt,/app/ids/pub/clients/client407.crt,/app/ids/pub/clients/client408.crt,/app/ids/pub/clients/client409.crt,/app/ids/pub/clients/client410.crt,/app/ids/pub/clients/client411.crt,/app/ids/pub/clients/client412.crt,/app/ids/pub/clients/client413.crt,/app/ids/pub/clients/client414.crt,/app/ids/pub/clients/client415.crt,/app/ids/pub/clients/client416.crt,/app/ids/pub/clients/client417.crt,/app/ids/pub/clients/client418.crt,/app/ids/pub/clients/client419.crt,/app/ids/pub/clients/client420.crt,/app/ids/pub/clients/client421.crt,/app/ids/pub/clients/client422.crt,/app/ids/pub/clients/client423.crt,/app/ids/pub/clients/client424.crt,/app/ids/pub/clients/client425.crt,/app/ids/pub/clients/client426.crt,/app/ids/pub/clients/client427.crt,/app/ids/pub/clients/client428.crt,/app/ids/pub/clients/client429.crt,/app/ids/pub/clients/client430.crt,/app/ids/pub/clients/client431.crt,/app/ids/pub/clients/client432.crt,/app/ids/pub/clients/client433.crt,/app/ids/pub/clients/client434.crt,/app/ids/pub/clients/client435.crt,/app/ids/pub/clients/client436.crt,/app/ids/pub/clients/client437.crt,/app/ids/pub/clients/client438.crt,/app/ids/pub/clients/client439.crt,/app/ids/pub/clients/client440.crt,/app/ids/pub/clients/client441.crt,/app/ids/pub/clients/client442.crt,/app/ids/pub/clients/client443.crt,/app/ids/pub/clients/client444.crt,/app/ids/pub/clients/client445.crt,/app/ids/pub/clients/client446.crt,/app/ids/pub/clients/client447.crt,/app/ids/pub/clients/client448.crt,/app/ids/pub/clients/client449.crt,/app/ids/pub/clients/client450.crt,/app/ids/pub/clients/client451.crt,/app/ids/pub/clients/client452.crt,/app/ids/pub/clients/client453.crt,/app/ids/pub/clients/client454.crt,/app/ids/pub/clients/client455.crt,/app/ids/pub/clients/client456.crt,/app/ids/pub/clients/client457.crt,/app/ids/pub/clients/client458.crt,/app/ids/pub/clients/client459.crt,/app/ids/pub/clients/client460.crt,/app/ids/pub/clients/client461.crt,/app/ids/pub/clients/client462.crt,/app/ids/pub/clients/client463.crt,/app/ids/pub/clients/client464.crt,/app/ids/pub/clients/client465.crt,/app/ids/pub/clients/client466.crt,/app/ids/pub/clients/client467.crt,/app/ids/pub/clients/client468.crt,/app/ids/pub/clients/client469.crt,/app/ids/pub/clients/client470.crt,/app/ids/pub/clients/client471.crt,/app/ids/pub/clients/client472.crt,/app/ids/pub/clients/client473.crt,/app/ids/pub/clients/client474.crt,/app/ids/pub/clients/client475.crt,/app/ids/pub/clients/client476.crt,/app/ids/pub/clients/client477.crt,/app/ids/pub/clients/client478.crt,/app/ids/pub/clients/client479.crt,/app/ids/pub/clients/client480.crt,/app/ids/pub/clients/client481.crt,/app/ids/pub/clients/client482.crt,/app/ids/pub/clients/client483.crt,/app/ids/pub/clients/client484.crt,/app/ids/pub/clients/client485.crt,/app/ids/pub/clients/client486.crt,/app/ids/pub/clients/client487.crt,/app/ids/pub/clients/client488.crt,/app/ids/pub/clients/client489.crt,/app/ids/pub/clients/client490.crt,/app/ids/pub/clients/client491.crt,/app/ids/pub/clients/client492.crt,/app/ids/pub/clients/client493.crt,/app/ids/pub/clients/client494.crt,/app/ids/pub/clients/client495.crt,/app/ids/pub/clients/client496.crt,/app/ids/pub/clients/client497.crt,/app/ids/pub/clients/client498.crt,/app/ids/pub/clients/client499.crt,/app/ids/pub/clients/client500.crt,/app/ids/pub/clients/client501.crt,/app/ids/pub/clients/client502.crt,/app/ids/pub/clients/client503.crt,/app/ids/pub/clients/client504.crt,/app/ids/pub/clients/client505.crt,/app/ids/pub/clients/client506.crt,/app/ids/pub/clients/client507.crt,/app/ids/pub/clients/client508.crt,/app/ids/pub/clients/client509.crt,/app/ids/pub/clients/client510.crt,/app/ids/pub/clients/client511.crt"
+      - "/app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt"
       - --initial-mpc-nodes
       - "/app/ids/pub/nodes/node0.crt,/app/ids/pub/nodes/node1.crt,/app/ids/pub/nodes/node2.crt,/app/ids/pub/nodes/node3.crt,/app/ids/pub/nodes/node4.crt"
     ports:
@@ -110,7 +119,7 @@ services:
       start_period: 10s
     networks:
       stoffel:
-        aliases: [coordinator.stoffel-coord.local]
+        ipv4_address: 172.28.0.5
 
   party0:
     <<: *party
@@ -118,10 +127,19 @@ services:
       <<: *common-env
       STOFFEL_ROLE: leader
       STOFFEL_PARTY_ID: "0"
-      STOFFEL_BIND_ADDR: "0.0.0.0:9000"
-      STOFFEL_RPC_ADDR: "0.0.0.0:16180"
+      STOFFEL_BIND_ADDR: "172.28.0.10:9000"
+      STOFFEL_ADVERTISE_IP: "172.28.0.10"
+      STOFFEL_RPC_ADDR: "172.28.0.10:16180"
       STOFFEL_CERT: /app/ids/pub/nodes/node0.crt
       STOFFEL_KEY: /app/ids/priv/nodes/node0.der
+      STOFFEL_PREPROC_STORE: /var/lib/stoffel-preproc
+      STOFFEL_NODE_RPC_ADDRS: "172.28.0.10:16180,172.28.0.11:16181,172.28.0.12:16182,172.28.0.13:16183,172.28.0.14:16184"
+      STOFFEL_NODE_RPC_DESIGNATED_PARTY_CERT: /app/ids/pub/nodes/node0.crt
+    volumes:
+      - ../programs:/app/programs:ro
+      - ../ids/pub:/app/ids/pub:ro
+      - ../ids/priv/nodes/node0.der:/app/ids/priv/nodes/node0.der:ro
+      - party0-preproc:/var/lib/stoffel-preproc
     ports:
       - "9000:9000"
       - "16180:16180"
@@ -133,7 +151,7 @@ services:
       start_period: 10s
     networks:
       stoffel:
-        aliases: [party0.stoffel-coord.local]
+        ipv4_address: 172.28.0.10
 
   party1:
     <<: *party
@@ -141,11 +159,19 @@ services:
       <<: *common-env
       STOFFEL_ROLE: party
       STOFFEL_PARTY_ID: "1"
-      STOFFEL_BIND_ADDR: "0.0.0.0:9001"
-      STOFFEL_RPC_ADDR: "0.0.0.0:16181"
+      STOFFEL_BIND_ADDR: "172.28.0.11:9001"
+      STOFFEL_ADVERTISE_IP: "172.28.0.11"
+      STOFFEL_RPC_ADDR: "172.28.0.11:16181"
       STOFFEL_CERT: /app/ids/pub/nodes/node1.crt
       STOFFEL_KEY: /app/ids/priv/nodes/node1.der
-      STOFFEL_BOOTSTRAP_ADDR: "party0.stoffel-coord.local:9000"
+      STOFFEL_PREPROC_STORE: /var/lib/stoffel-preproc
+      STOFFEL_BOOTSTRAP_ADDR: "172.28.0.10:9000"
+      STOFFEL_NODE_RPC_DESIGNATED_PARTY_CERT: /app/ids/pub/nodes/node0.crt
+    volumes:
+      - ../programs:/app/programs:ro
+      - ../ids/pub:/app/ids/pub:ro
+      - ../ids/priv/nodes/node1.der:/app/ids/priv/nodes/node1.der:ro
+      - party1-preproc:/var/lib/stoffel-preproc
     ports:
       - "9001:9001"
       - "16181:16181"
@@ -156,7 +182,7 @@ services:
         condition: service_healthy
     networks:
       stoffel:
-        aliases: [party1.stoffel-coord.local]
+        ipv4_address: 172.28.0.11
 
   party2:
     <<: *party
@@ -164,11 +190,19 @@ services:
       <<: *common-env
       STOFFEL_ROLE: party
       STOFFEL_PARTY_ID: "2"
-      STOFFEL_BIND_ADDR: "0.0.0.0:9002"
-      STOFFEL_RPC_ADDR: "0.0.0.0:16182"
+      STOFFEL_BIND_ADDR: "172.28.0.12:9002"
+      STOFFEL_ADVERTISE_IP: "172.28.0.12"
+      STOFFEL_RPC_ADDR: "172.28.0.12:16182"
       STOFFEL_CERT: /app/ids/pub/nodes/node2.crt
       STOFFEL_KEY: /app/ids/priv/nodes/node2.der
-      STOFFEL_BOOTSTRAP_ADDR: "party0.stoffel-coord.local:9000"
+      STOFFEL_PREPROC_STORE: /var/lib/stoffel-preproc
+      STOFFEL_BOOTSTRAP_ADDR: "172.28.0.10:9000"
+      STOFFEL_NODE_RPC_DESIGNATED_PARTY_CERT: /app/ids/pub/nodes/node0.crt
+    volumes:
+      - ../programs:/app/programs:ro
+      - ../ids/pub:/app/ids/pub:ro
+      - ../ids/priv/nodes/node2.der:/app/ids/priv/nodes/node2.der:ro
+      - party2-preproc:/var/lib/stoffel-preproc
     ports:
       - "9002:9002"
       - "16182:16182"
@@ -179,7 +213,7 @@ services:
         condition: service_healthy
     networks:
       stoffel:
-        aliases: [party2.stoffel-coord.local]
+        ipv4_address: 172.28.0.12
 
   party3:
     <<: *party
@@ -187,11 +221,19 @@ services:
       <<: *common-env
       STOFFEL_ROLE: party
       STOFFEL_PARTY_ID: "3"
-      STOFFEL_BIND_ADDR: "0.0.0.0:9003"
-      STOFFEL_RPC_ADDR: "0.0.0.0:16183"
+      STOFFEL_BIND_ADDR: "172.28.0.13:9003"
+      STOFFEL_ADVERTISE_IP: "172.28.0.13"
+      STOFFEL_RPC_ADDR: "172.28.0.13:16183"
       STOFFEL_CERT: /app/ids/pub/nodes/node3.crt
       STOFFEL_KEY: /app/ids/priv/nodes/node3.der
-      STOFFEL_BOOTSTRAP_ADDR: "party0.stoffel-coord.local:9000"
+      STOFFEL_PREPROC_STORE: /var/lib/stoffel-preproc
+      STOFFEL_BOOTSTRAP_ADDR: "172.28.0.10:9000"
+      STOFFEL_NODE_RPC_DESIGNATED_PARTY_CERT: /app/ids/pub/nodes/node0.crt
+    volumes:
+      - ../programs:/app/programs:ro
+      - ../ids/pub:/app/ids/pub:ro
+      - ../ids/priv/nodes/node3.der:/app/ids/priv/nodes/node3.der:ro
+      - party3-preproc:/var/lib/stoffel-preproc
     ports:
       - "9003:9003"
       - "16183:16183"
@@ -202,7 +244,7 @@ services:
         condition: service_healthy
     networks:
       stoffel:
-        aliases: [party3.stoffel-coord.local]
+        ipv4_address: 172.28.0.13
 
   party4:
     <<: *party
@@ -210,11 +252,19 @@ services:
       <<: *common-env
       STOFFEL_ROLE: party
       STOFFEL_PARTY_ID: "4"
-      STOFFEL_BIND_ADDR: "0.0.0.0:9004"
-      STOFFEL_RPC_ADDR: "0.0.0.0:16184"
+      STOFFEL_BIND_ADDR: "172.28.0.14:9004"
+      STOFFEL_ADVERTISE_IP: "172.28.0.14"
+      STOFFEL_RPC_ADDR: "172.28.0.14:16184"
       STOFFEL_CERT: /app/ids/pub/nodes/node4.crt
       STOFFEL_KEY: /app/ids/priv/nodes/node4.der
-      STOFFEL_BOOTSTRAP_ADDR: "party0.stoffel-coord.local:9000"
+      STOFFEL_PREPROC_STORE: /var/lib/stoffel-preproc
+      STOFFEL_BOOTSTRAP_ADDR: "172.28.0.10:9000"
+      STOFFEL_NODE_RPC_DESIGNATED_PARTY_CERT: /app/ids/pub/nodes/node0.crt
+    volumes:
+      - ../programs:/app/programs:ro
+      - ../ids/pub:/app/ids/pub:ro
+      - ../ids/priv/nodes/node4.der:/app/ids/priv/nodes/node4.der:ro
+      - party4-preproc:/var/lib/stoffel-preproc
     ports:
       - "9004:9004"
       - "16184:16184"
@@ -225,4 +275,11 @@ services:
         condition: service_healthy
     networks:
       stoffel:
-        aliases: [party4.stoffel-coord.local]
+        ipv4_address: 172.28.0.14
+
+volumes:
+  party0-preproc:
+  party1-preproc:
+  party2-preproc:
+  party3-preproc:
+  party4-preproc:

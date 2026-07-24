@@ -355,11 +355,19 @@ lines = [
     f'aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {registry}',
     f'mkdir -p /home/ec2-user/programs',
     f'aws s3 cp s3://{bucket}/{base} /home/ec2-user/programs/{base}',
+    # Identity certs/keys are no longer baked into the party image (see
+    # StoffelPartyStack's docstring in app.py) — user_data already seeded
+    # /home/ec2-user/ids at instance boot, but re-sync here too so a
+    # rotated cert takes effect on the next run without replacing the
+    # instance.
+    f'mkdir -p /home/ec2-user/ids',
+    f'aws s3 cp --recursive s3://{bucket}/ids/ /home/ec2-user/ids/',
     f'docker pull {image}',
     f'docker rm -f {container} >/dev/null 2>&1 || true',
     f'docker run -d --name {container} --network host --log-driver awslogs '
     f'--log-opt awslogs-region={region} --log-opt awslogs-group={log_group} --log-opt awslogs-stream={stream} '
     f'-v /home/ec2-user/programs:/app/programs:ro '
+    f'-v /home/ec2-user/ids:/app/ids:ro '
     f'{env_flags} '
     f'--entrypoint /bin/bash {image} -c \'{entry}\'',
 ]
