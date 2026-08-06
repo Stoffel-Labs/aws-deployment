@@ -34,6 +34,11 @@ def gen(n: int, t: int) -> str:
     party_ip_array = " ".join(party_ip(i) for i in range(n))
     node_rpc_addrs = ",".join(f"{party_ip(i)}:{16180 + i}" for i in range(n))
 
+    expected_clients = os.environ.get("STOFFEL_EXPECTED_CLIENTS", "")
+    n_input_clients = len(expected_clients.split(",")) if expected_clients else 0
+    client_input_count = int(os.environ.get("STOFFEL_CLIENT_INPUT_COUNT") or 1)
+    n_inputs = n_input_clients * client_input_count
+
     lines = [
         "networks:",
         "  stoffel:",
@@ -103,13 +108,17 @@ def gen(n: int, t: int) -> str:
         '  NET_LOSS: "${NET_LOSS:-}"',
         '  NET_BANDWIDTH: "${NET_BANDWIDTH:-}"',
         '  STOFFEL_WAIT_FOR_CLIENTS: "${STOFFEL_WAIT_FOR_CLIENTS:-}"',
+        '  STOFFEL_CLIENT_INPUT_COUNT: "${STOFFEL_CLIENT_INPUT_COUNT:-}"',
         '  STOFFEL_SKIP_HOST_WAIT: "true"',
+        '  STOFFEL_ONE_OFF: "true"',
         "",
         "services:",
         "  coordinator:",
         "    build:",
         "      context: ../stoffel-mpc-coordinator",
         "      dockerfile: Dockerfile.benchmark",
+        "      additional_contexts:",
+        "        stoffelvm: ../StoffelVM",
         "    volumes:",
         "      - ../programs:/app/programs:ro",
         "      - ../ids/pub:/app/ids/pub:ro",
@@ -131,7 +140,9 @@ def gen(n: int, t: int) -> str:
         "      - --addr",
         '      - "0.0.0.0"',
         "      - --hash",
-        '      - "0000000000000000000000000000000000000000000000000000000000000000"',
+        '      - "0000000000000000000000000000000000000000000000000000000000000002"',
+#        "      - --one-off",
+#        '      - "0000000000000000000000000000000000000000000000000000000000000002,0000000000000000000000000000000000000000000000000000000000000001"',
         "      - --server-cert",
         "      - /app/ids/pub/coord.crt",
         "      - --server-key",
@@ -140,11 +151,12 @@ def gen(n: int, t: int) -> str:
         f'      - "{n}"',
         "      - --t",
         f'      - "{t}"',
-        "      - --program",
-        '      - "${STOFFEL_PROGRAM}"',
+        #"      - --program",
+        #'      - "${STOFFEL_PROGRAM}"',
+        "      - --n-inputs",
+        f'      - "{n_inputs}"',
     ]
 
-    expected_clients = os.environ.get("STOFFEL_EXPECTED_CLIENTS", "")
     if expected_clients:
         lines += [
             "      - --output-clients",

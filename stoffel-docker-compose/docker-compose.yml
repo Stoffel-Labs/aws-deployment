@@ -66,13 +66,17 @@ x-common-env: &common-env
   NET_LOSS: "${NET_LOSS:-}"
   NET_BANDWIDTH: "${NET_BANDWIDTH:-}"
   STOFFEL_WAIT_FOR_CLIENTS: "${STOFFEL_WAIT_FOR_CLIENTS:-}"
+  STOFFEL_CLIENT_INPUT_COUNT: "${STOFFEL_CLIENT_INPUT_COUNT:-}"
   STOFFEL_SKIP_HOST_WAIT: "true"
+  STOFFEL_ONE_OFF: "true"
 
 services:
   coordinator:
     build:
       context: ../stoffel-mpc-coordinator
       dockerfile: Dockerfile.benchmark
+      additional_contexts:
+        stoffelvm: ../StoffelVM
     volumes:
       - ../programs:/app/programs:ro
       - ../ids/pub:/app/ids/pub:ro
@@ -94,7 +98,7 @@ services:
       - --addr
       - "0.0.0.0"
       - --hash
-      - "0000000000000000000000000000000000000000000000000000000000000000"
+      - "0000000000000000000000000000000000000000000000000000000000000002"
       - --server-cert
       - /app/ids/pub/coord.crt
       - --server-key
@@ -103,10 +107,10 @@ services:
       - "5"
       - --t
       - "1"
-      - --program
-      - "${STOFFEL_PROGRAM}"
+      - --n-inputs
+      - "409600"
       - --output-clients
-      - "/app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt"
+      - "/app/ids/pub/clients/client0.crt,/app/ids/pub/clients/client1.crt,/app/ids/pub/clients/client2.crt,/app/ids/pub/clients/client3.crt,/app/ids/pub/clients/client4.crt,/app/ids/pub/clients/client5.crt,/app/ids/pub/clients/client6.crt,/app/ids/pub/clients/client7.crt,/app/ids/pub/clients/client8.crt,/app/ids/pub/clients/client9.crt,/app/ids/pub/clients/client10.crt,/app/ids/pub/clients/client11.crt,/app/ids/pub/clients/client12.crt,/app/ids/pub/clients/client13.crt,/app/ids/pub/clients/client14.crt,/app/ids/pub/clients/client15.crt,/app/ids/pub/clients/client16.crt,/app/ids/pub/clients/client17.crt,/app/ids/pub/clients/client18.crt,/app/ids/pub/clients/client19.crt,/app/ids/pub/clients/client20.crt,/app/ids/pub/clients/client21.crt,/app/ids/pub/clients/client22.crt,/app/ids/pub/clients/client23.crt,/app/ids/pub/clients/client24.crt,/app/ids/pub/clients/client25.crt,/app/ids/pub/clients/client26.crt,/app/ids/pub/clients/client27.crt,/app/ids/pub/clients/client28.crt,/app/ids/pub/clients/client29.crt,/app/ids/pub/clients/client30.crt,/app/ids/pub/clients/client31.crt,/app/ids/pub/clients/client32.crt,/app/ids/pub/clients/client33.crt,/app/ids/pub/clients/client34.crt,/app/ids/pub/clients/client35.crt,/app/ids/pub/clients/client36.crt,/app/ids/pub/clients/client37.crt,/app/ids/pub/clients/client38.crt,/app/ids/pub/clients/client39.crt,/app/ids/pub/clients/client40.crt,/app/ids/pub/clients/client41.crt,/app/ids/pub/clients/client42.crt,/app/ids/pub/clients/client43.crt,/app/ids/pub/clients/client44.crt,/app/ids/pub/clients/client45.crt,/app/ids/pub/clients/client46.crt,/app/ids/pub/clients/client47.crt,/app/ids/pub/clients/client48.crt,/app/ids/pub/clients/client49.crt,/app/ids/pub/clients/client50.crt,/app/ids/pub/clients/client51.crt,/app/ids/pub/clients/client52.crt,/app/ids/pub/clients/client53.crt,/app/ids/pub/clients/client54.crt,/app/ids/pub/clients/client55.crt,/app/ids/pub/clients/client56.crt,/app/ids/pub/clients/client57.crt,/app/ids/pub/clients/client58.crt,/app/ids/pub/clients/client59.crt,/app/ids/pub/clients/client60.crt,/app/ids/pub/clients/client61.crt,/app/ids/pub/clients/client62.crt,/app/ids/pub/clients/client63.crt,/app/ids/pub/clients/client64.crt,/app/ids/pub/clients/client65.crt,/app/ids/pub/clients/client66.crt,/app/ids/pub/clients/client67.crt,/app/ids/pub/clients/client68.crt,/app/ids/pub/clients/client69.crt,/app/ids/pub/clients/client70.crt,/app/ids/pub/clients/client71.crt,/app/ids/pub/clients/client72.crt,/app/ids/pub/clients/client73.crt,/app/ids/pub/clients/client74.crt,/app/ids/pub/clients/client75.crt,/app/ids/pub/clients/client76.crt,/app/ids/pub/clients/client77.crt,/app/ids/pub/clients/client78.crt,/app/ids/pub/clients/client79.crt,/app/ids/pub/clients/client80.crt,/app/ids/pub/clients/client81.crt,/app/ids/pub/clients/client82.crt,/app/ids/pub/clients/client83.crt,/app/ids/pub/clients/client84.crt,/app/ids/pub/clients/client85.crt,/app/ids/pub/clients/client86.crt,/app/ids/pub/clients/client87.crt,/app/ids/pub/clients/client88.crt,/app/ids/pub/clients/client89.crt,/app/ids/pub/clients/client90.crt,/app/ids/pub/clients/client91.crt,/app/ids/pub/clients/client92.crt,/app/ids/pub/clients/client93.crt,/app/ids/pub/clients/client94.crt,/app/ids/pub/clients/client95.crt,/app/ids/pub/clients/client96.crt,/app/ids/pub/clients/client97.crt,/app/ids/pub/clients/client98.crt,/app/ids/pub/clients/client99.crt"
       - --initial-mpc-nodes
       - "/app/ids/pub/nodes/node0.crt,/app/ids/pub/nodes/node1.crt,/app/ids/pub/nodes/node2.crt,/app/ids/pub/nodes/node3.crt,/app/ids/pub/nodes/node4.crt"
     ports:

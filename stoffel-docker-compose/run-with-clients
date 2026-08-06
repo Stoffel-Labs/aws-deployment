@@ -1,0 +1,70 @@
+#!/bin/sh
+# Start the cluster and run N clients sequentially.
+# The i-th client (0-indexed) is invoked as:
+#   run-client i "i,i,...,i" i*COUNT
+# where "i,i,...,i" repeats i COUNT times (COUNT = --client-input-count, default 1)
+# and the reserved client-index is the start of that client's block of COUNT
+# input slots.
+#
+# --num-parties/--threshold (same defaults as run-nodes: 4/1) are passed
+# through to both run-nodes and every run-client invocation, so the clients
+# always dial the same topology the cluster was actually started with.
+#
+# Usage: ./run-with-clients <program.stflb> <N> [--client-input-count <n>] [--num-parties <n>] [--threshold <t>] [run-nodes options...]
+#   e.g. ./run-with-clients client_mul.stflb 4 --client-input-count 3 --loss 5 --bandwidth 100
+
+set -e
+
+usage() { echo "Usage: $0 <program.stflb> <N> [--client-input-count <n>] [--num-parties <n>] [--threshold <t>] [--loss <pct>] [--bandwidth <mbit>] [--delay <ms>]" >&2; exit 1; }
+
+PROGRAM="${1:?$(usage)}"; shift
+N="${1:?$(usage)}"; shift
+
+EXECUTION_ID=0000000000000000000000000000000000000000000000000000000000000001
+CLIENT_INPUT_COUNT=1
+NUM_PARTIES=4
+THRESHOLD=1
+REST_COUNT=$#
+i=0
+while [ "$i" -lt "$REST_COUNT" ]; do
+    case "$1" in
+        --client-input-count) CLIENT_INPUT_COUNT="$2"; shift 2; i=$((i + 2)) ;;
+        --num-parties) NUM_PARTIES="$2"; set -- "$@" "$1" "$2"; shift 2; i=$((i + 2)) ;;
+        --threshold) THRESHOLD="$2"; set -- "$@" "$1" "$2"; shift 2; i=$((i + 2)) ;;
+        *) set -- "$@" "$1"; shift; i=$((i + 1)) ;;
+    esac
+done
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
+"$DIR/run-nodes" "$PROGRAM" --n-input-clients "$N" --client-input-count "$CLIENT_INPUT_COUNT" "$@"
+
+sleep 1
+
+# Each client dials NUM_PARTIES fresh TLS/WebSocket connections as soon as it starts.
+# Launching all N clients back-to-back with no gap fires N*NUM_PARTIES connection
+# attempts at the party RPC ports in a single instant; past a couple dozen clients
+# this burst can outrun TLS-handshake/accept throughput and surface as clients
+# getting a closed connection ("restart required") instead of a slow-but-working
+# run. A small stagger between spawns smooths the burst out. Override with
+# CLIENT_STAGGER_SECONDS=0 to restore the old fire-all-at-once behavior.
+CLIENT_STAGGER_SECONDS="${CLIENT_STAGGER_SECONDS:-0.02}"
+
+i=0
+date
+while [ "$i" -lt "$N" ]; do
+    INPUTS=""
+    j=0
+    while [ "$j" -lt "$CLIENT_INPUT_COUNT" ]; do
+        INPUTS="${INPUTS:+$INPUTS,}$i"
+        j=$((j + 1))
+    done
+    "$DIR/run-client" "$i" "$INPUTS" "$((i * CLIENT_INPUT_COUNT))" --num-parties "$NUM_PARTIES" --threshold "$THRESHOLD" --outputs 0 &
+    #"$DIR/run-client" "$i" "$INPUTS" "$((i * CLIENT_INPUT_COUNT))" --num-parties "$NUM_PARTIES" --threshold "$THRESHOLD" --outputs 0 --execution-id "$EXECUTION_ID" &
+    echo "Started client $i"
+    i=$((i + 1))
+    if [ "$CLIENT_STAGGER_SECONDS" != "0" ] && [ "$i" -lt "$N" ]; then
+        sleep "$CLIENT_STAGGER_SECONDS"
+    fi
+done
+date

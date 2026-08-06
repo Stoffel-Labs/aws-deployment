@@ -1,23 +1,33 @@
 #!/bin/sh
 # Run a Stoffel client locally against the Docker Compose cluster.
-# Parties expose their RPC ports on localhost:16180-16184.
+# Parties expose their RPC ports on localhost:16180, 16181, ... (one per party).
 #
-# Usage: ./run-client <client_id> [inputs [client_index]] [--outputs N]
+# Usage: ./run-client <client_id> [inputs [client_index]] [--outputs N] [--num-parties <n>] [--threshold <t>] [--execution-id <id>]
 #   Input client:  ./run-client 0 "1 2 3"
 #   Output-only:   ./run-client 0 --outputs 2
+#
+# --num-parties/--threshold must match whatever the cluster was actually
+# started with (run-nodes defaults to 4/1) or the client will try to dial
+# RPC ports that don't exist and fail with "Connection refused".
 
 set -e
 
-CLIENT_ID="${1:?Usage: $0 <client_id> [inputs [client_index]] [--outputs N]}"
+CLIENT_ID="${1:?Usage: $0 <client_id> [inputs [client_index]] [--outputs N] [--num-parties <n>] [--threshold <t>] [--execution-id <id>]}"
 shift
 
 INPUTS=""
 CLIENT_INDEX=""
 OUTPUTS=""
+NUM_PARTIES=4
+THRESHOLD=1
+EXECUTION_ID=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --outputs) OUTPUTS="$2"; shift 2 ;;
+        --num-parties) NUM_PARTIES="$2"; shift 2 ;;
+        --threshold) THRESHOLD="$2"; shift 2 ;;
+        --execution-id) EXECUTION_ID="$2"; shift 2 ;;
         -*) echo "Unknown option: $1" >&2; exit 1 ;;
         *)
             if [ -z "$INPUTS" ]; then
@@ -43,7 +53,7 @@ fi
 
 SERVERS=""
 i=0
-while [ "$i" -lt 5 ]; do
+while [ "$i" -lt "$NUM_PARTIES" ]; do
     PORT=$((16180 + i))
     SERVERS="${SERVERS:+$SERVERS,}127.0.0.1:${PORT}"
     i=$((i + 1))
@@ -52,12 +62,16 @@ done
 set -- \
     --client \
     --servers "$SERVERS" \
-    --n-parties 5 \
-    --threshold 1 \
+    --n-parties "$NUM_PARTIES" \
+    --threshold "$THRESHOLD" \
     --off-chain-coord "127.0.0.1:31415" \
     --cert "${IDS_DIR}/pub/clients/client${CLIENT_ID}.crt" \
     --key "${IDS_DIR}/priv/clients/client${CLIENT_ID}.der" \
     --timestamp 0
+
+if [ -n "$EXECUTION_ID" ]; then
+    set -- "$@" --execution-id "$EXECUTION_ID"
+fi
 
 if [ -n "$INPUTS" ]; then
     set -- "$@" --inputs "$INPUTS" --client-index "$CLIENT_INDEX"

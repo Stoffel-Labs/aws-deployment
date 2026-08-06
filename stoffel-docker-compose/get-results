@@ -2,9 +2,11 @@
 # Aggregate each container's post-run ping output (coordinator + every party
 # pings everyone else, via Docker's built-in DNS — see the ping loops baked
 # into gen-docker-compose) into an RTT matrix, written as CSV. Also pulls
-# every node's BENCH_PP_SECS/BENCH_EXEC_SECS lines (printed by stoffel-run
-# right before it exits, same as the ping lines) and reports min/max/average
-# preprocessing and execution time across nodes.
+# every node's PP_SECS/EXEC_SECS lines (printed by stoffel-run right before
+# it exits, same as the ping lines) and reports min/max/average
+# preprocessing and execution time across nodes. Also reports the duration
+# of each run stage (Preprocessing, InputMaskReservation, ...), computed
+# from the coordinator's BENCH_ROUND timestamps.
 #
 # Usage: ./get-results [output-csv]
 #   Row/column 0 is the coordinator, row/column i+1 is node i.
@@ -21,10 +23,15 @@ usage() {
     echo "  node i. Also reports min/max/average RTT across all inter-party" >&2
     echo "  pairs. (default output: ping-matrix.csv)" >&2
     echo "" >&2
-    echo "  In addition, pulls every node's BENCH_PP_SECS/BENCH_EXEC_SECS lines" >&2
+    echo "  In addition, pulls every node's PP_SECS/EXEC_SECS lines" >&2
     echo "  (already present in the same logs, since every node prints its" >&2
     echo "  benchmark lines before exiting, same as the ping lines) and reports" >&2
     echo "  min/max/average preprocessing and execution time across nodes." >&2
+    echo "" >&2
+    echo "  Also reports the duration of each run stage (Preprocessing," >&2
+    echo "  InputMaskReservation, InputCollection, MPCExecution," >&2
+    echo "  OutputDistribution), computed from the coordinator's BENCH_ROUND" >&2
+    echo "  timestamps." >&2
     exit 1
 }
 
@@ -142,28 +149,51 @@ def cell(i, j):
         return f'{back:.3f}'
     return ''
 
-# BENCH_PP_SECS/BENCH_EXEC_SECS are each printed once per node, right before
-# the container exits (see stoffel-run.rs), same as the ping lines — so
-# they're already in the log lines fetched above, no extra docker calls
-# needed. A node can log more than one of either line (e.g. avss vs
-# standard-backend code paths); take the last one.
+# PP_SECS/EXEC_SECS are printed per node, right before the container exits
+# (see stoffel-run.rs), same as the ping lines — so they're already in the
+# log lines fetched above, no extra docker calls needed. A node can log more
+# than one of either line (e.g. multiple preprocessing/execution rounds);
+# take the last one.
 pp_secs = {}
 exec_secs = {}
 for source, message in entries:
     if not re.fullmatch(r'node\d+', source):
         continue
-    m = re.search(r'BENCH_PP_SECS: (\S+)', message)
+    m = re.search(r'MPC preprocessing complete! PP_SECS: (\S+)', message)
     if m:
         try:
             pp_secs[source] = float(m.group(1))
         except ValueError:
             pass
-    m = re.search(r'BENCH_EXEC_SECS: (\S+)', message)
+    m = re.search(r'online VM execution complete! EXEC_SECS: (\S+)', message)
     if m:
         try:
             exec_secs[source] = float(m.group(1))
         except ValueError:
             pass
+
+# The coordinator prints one BENCH_ROUND line per stage of the run, each
+# tagged with a millisecond epoch timestamp (see off_chain.rs). Same
+# fixed stage order used by the sibling run-exp scripts; a stage's
+# duration is the gap between its timestamp and the next stage's. If a
+# stage name appears more than once (e.g. a retried run), take its last
+# occurrence, same as pp_secs/exec_secs above.
+ROUND_NAMES = ['Preprocessing', 'InputMaskReservation', 'InputCollection',
+               'MPCExecution', 'OutputDistribution', 'ProgramFinished']
+round_ts = {}
+for source, message in entries:
+    if source != 'coord':
+        continue
+    m = re.search(r'BENCH_ROUND: (\w+) ts=(\d+)', message)
+    if m and m.group(1) in ROUND_NAMES:
+        round_ts[m.group(1)] = int(m.group(2))
+
+round_durations = {}
+for idx in range(len(ROUND_NAMES) - 1):
+    name, next_name = ROUND_NAMES[idx], ROUND_NAMES[idx + 1]
+    t0, t1 = round_ts.get(name), round_ts.get(next_name)
+    if t0 is not None and t1 is not None:
+        round_durations[name] = (t1 - t0) / 1000.0
 
 with open(sys.argv[1], 'w', newline='') as f:
     writer = csv.writer(f)
@@ -195,14 +225,23 @@ with open(sys.argv[1], 'w', newline='') as f:
                       f'{max(exec_values):.3f}' if exec_values else '',
                       f'{sum(exec_values) / len(exec_values):.3f}' if exec_values else ''])
 
+    writer.writerow([])
+    writer.writerow(['round', 'duration_secs'])
+    for name in ROUND_NAMES[:-1]:
+        writer.writerow([name, f'{round_durations[name]:.3f}' if name in round_durations else ''])
+
 print(f'Wrote {len(entities)}x{len(entities)} RTT matrix and {len(node_indices)}-node benchmark stats to {sys.argv[1]}')
 
 missing_pp = [f'node{i}' for i in node_indices if f'node{i}' not in pp_secs]
 missing_exec = [f'node{i}' for i in node_indices if f'node{i}' not in exec_secs]
 if missing_pp:
-    print(f'WARNING: no BENCH_PP_SECS found for: {\", \".join(missing_pp)}', file=sys.stderr)
+    print(f'WARNING: no PP_SECS found for: {\", \".join(missing_pp)}', file=sys.stderr)
 if missing_exec:
-    print(f'WARNING: no BENCH_EXEC_SECS found for: {\", \".join(missing_exec)}', file=sys.stderr)
+    print(f'WARNING: no EXEC_SECS found for: {\", \".join(missing_exec)}', file=sys.stderr)
+
+missing_rounds = [name for name in ROUND_NAMES if name not in round_ts]
+if missing_rounds:
+    print(f'WARNING: no BENCH_ROUND timestamp found for: {\", \".join(missing_rounds)}', file=sys.stderr)
 
 print('')
 print('RTT across nodes:')
@@ -211,15 +250,23 @@ if values:
 else:
     print('  no RTT values found')
 
-print('Preprocessing time (BENCH_PP_SECS) across nodes:')
+print('Preprocessing time (PP_SECS) across nodes:')
 if pp_values:
     print(f'  min: {min(pp_values):.3f}s  max: {max(pp_values):.3f}s  avg: {sum(pp_values) / len(pp_values):.3f}s  (n={len(pp_values)})')
 else:
-    print('  no BENCH_PP_SECS values found')
+    print('  no PP_SECS values found')
 
-print('Execution time (BENCH_EXEC_SECS) across nodes:')
+print('Execution time (EXEC_SECS) across nodes:')
 if exec_values:
     print(f'  min: {min(exec_values):.3f}s  max: {max(exec_values):.3f}s  avg: {sum(exec_values) / len(exec_values):.3f}s  (n={len(exec_values)})')
 else:
-    print('  no BENCH_EXEC_SECS values found')
+    print('  no EXEC_SECS values found')
+
+print('Round durations (coordinator BENCH_ROUND timestamps):')
+if round_durations:
+    for name in ROUND_NAMES[:-1]:
+        if name in round_durations:
+            print(f'  {name}: {round_durations[name]:.3f}s')
+else:
+    print('  no BENCH_ROUND timestamps found')
 " "$OUT_CSV" "$RAW"
