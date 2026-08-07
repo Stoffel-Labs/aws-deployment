@@ -1,0 +1,72 @@
+#!/bin/sh
+# Sweep --delay across a range of values, running run-with-clients once per
+# value and snapshotting each run's get-results output into --results-dir as
+# results_delay=<d>.csv — the layout plot-delay-sweep expects.
+#
+# Usage: ./run-delay-sweep <program.stflb> --delay-start <ms> --delay-step <ms> --num-steps <n> --results-dir <dir> [--num-clients <n>] [--client-input-count <n>] [--num-nodes <n>] [--threshold <t>]
+#   e.g. ./run-delay-sweep client_mul.stflb --delay-start 5 --delay-step 5 --num-steps 8 --results-dir delay-sweep-results --num-clients 4 --client-input-count 3 --num-nodes 5 --threshold 1
+#
+# Step i (0-indexed, i in [0, num-steps)) runs at:
+#   delay = delay-start + i * delay-step
+# --num-clients, --client-input-count, --num-nodes, --threshold are passed
+# through to run-with-clients as <N>, --client-input-count, --num-parties,
+# and --threshold respectively (same defaults as run-with-clients: 1 client,
+# 1 input/client, 4 parties, threshold 1).
+
+set -e
+
+usage() { echo "Usage: $0 <program.stflb> --delay-start <ms> --delay-step <ms> --num-steps <n> --results-dir <dir> [--num-clients <n>] [--client-input-count <n>] [--num-nodes <n>] [--threshold <t>]" >&2; exit 1; }
+
+PROGRAM="${1:?$(usage)}"; shift
+
+DELAY_START=""
+DELAY_STEP=""
+NUM_STEPS=""
+RESULTS_DIR=""
+NUM_CLIENTS=0
+CLIENT_INPUT_COUNT=0
+NUM_NODES=5
+THRESHOLD=1
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --delay-start)         DELAY_START="$2";        shift 2 ;;
+        --delay-step)          DELAY_STEP="$2";         shift 2 ;;
+        --num-steps)           NUM_STEPS="$2";           shift 2 ;;
+        --results-dir)         RESULTS_DIR="$2";         shift 2 ;;
+        --num-clients)         NUM_CLIENTS="$2";         shift 2 ;;
+        --client-input-count)  CLIENT_INPUT_COUNT="$2";  shift 2 ;;
+        --num-nodes)           NUM_NODES="$2";            shift 2 ;;
+        --threshold)           THRESHOLD="$2";            shift 2 ;;
+        *) echo "Unknown option: $1" >&2; usage ;;
+    esac
+done
+
+[ -n "$DELAY_START" ] || usage
+[ -n "$DELAY_STEP" ] || usage
+[ -n "$NUM_STEPS" ] || usage
+[ -n "$RESULTS_DIR" ] || usage
+
+case "$DELAY_START" in ''|*[!0-9]*) echo "Invalid --delay-start: $DELAY_START (expected an integer)" >&2; usage ;; esac
+case "$DELAY_STEP" in ''|*[!0-9]*) echo "Invalid --delay-step: $DELAY_STEP (expected an integer)" >&2; usage ;; esac
+case "$NUM_STEPS" in ''|*[!0-9]*) echo "Invalid --num-steps: $NUM_STEPS (expected an integer)" >&2; usage ;; esac
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+mkdir -p "$RESULTS_DIR"
+
+i=0
+while [ "$i" -lt "$NUM_STEPS" ]; do
+    DELAY=$((DELAY_START + i * DELAY_STEP))
+    echo "=== Sweep step $((i + 1))/$NUM_STEPS: delay=${DELAY}ms ==="
+
+    "$DIR/run-with-clients" "$PROGRAM" "$NUM_CLIENTS" \
+        --client-input-count "$CLIENT_INPUT_COUNT" \
+        --num-parties "$NUM_NODES" \
+        --threshold "$THRESHOLD" \
+        --delay "$DELAY"
+
+    "$DIR/get-results" "$RESULTS_DIR/results_delay=${DELAY}.csv"
+
+    i=$((i + 1))
+done
+
+echo "Delay sweep complete. Results written to $RESULTS_DIR"

@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""Plot per-round run duration vs. network delay from a run-delay-sweep output dir.
+
+Usage: ./plot-delay-sweep <results-dir> [output-png]
+  results-dir: directory containing results_delay=<d>.csv files
+  output-png:  path to write the combined plot to
+               (default: <results-dir>/plots/delay-sweep.png)
+
+Each results_delay=<d>.csv is a get-results snapshot; the trailing
+"round,duration_secs" table (Preprocessing, InputMaskReservation,
+InputCollection, MPCExecution, OutputDistribution) plus the average
+PP_SECS/EXEC_SECS across nodes (from the ",min,max,average" table) are
+what get plotted. All series are drawn as separate lines on one shared
+plot, each in its own color, with delay (ms) on the x-axis and duration
+(s) on the y-axis.
+"""
+
+import csv
+import re
+import sys
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+# dataviz skill: fixed categorical order, slots 1-7 (blue/orange/aqua/yellow/magenta/green/violet)
+ROUND_COLORS = {
+    "Preprocessing": "#2a78d6",
+    "InputMaskReservation": "#eb6834",
+    "InputCollection": "#1baf7a",
+    "MPCExecution": "#eda100",
+    "OutputDistribution": "#e87ba4",
+    "PP_SECS": "#008300",
+    "EXEC_SECS": "#4a3aa7",
+}
+ROUND_MARKERS = {
+    "Preprocessing": "o",
+    "InputMaskReservation": "s",
+    "InputCollection": "^",
+    "MPCExecution": "D",
+    "OutputDistribution": "v",
+    "PP_SECS": "P",
+    "EXEC_SECS": "X",
+}
+TEXT_PRIMARY = "#0b0b0b"
+TEXT_SECONDARY = "#52514e"
+GRID_COLOR = "#e5e4e0"
+
+FILENAME_RE = re.compile(r"results_delay=(\d+)\.csv$")
+
+
+def parse_round_durations(csv_path):
+    """Return {round_name: duration_secs} for a single get-results CSV."""
+    rows = list(csv.reader(csv_path.open(newline="")))
+    durations = {}
+    for i, row in enumerate(rows):
+        if row[:2] == ["round", "duration_secs"]:
+            for data_row in rows[i + 1:]:
+                if len(data_row) < 2 or not data_row[0]:
+                    break
+                name, value = data_row[0], data_row[1]
+                if value:
+                    try:
+                        durations[name] = float(value)
+                    except ValueError:
+                        pass
+            break
+    return durations
+
+
+def parse_avg_rtt(csv_path):
+    """Return the measured average inter-party RTT (ms) from a single
+    get-results CSV, i.e. the 'average' row of the ping-matrix's
+    min/max/average summary (not the pp_secs/exec_secs one)."""
+    rows = list(csv.reader(csv_path.open(newline="")))
+    for row in rows:
+        if len(row) == 2 and row[0] == "average":
+            try:
+                return float(row[1])
+            except ValueError:
+                return None
+    return None
+
+
+def parse_secs_stats(csv_path):
+    """Return {'PP_SECS': avg, 'EXEC_SECS': avg} from a single get-results CSV,
+    reading the average column of its ",min,max,average" table."""
+    rows = list(csv.reader(csv_path.open(newline="")))
+    labels = {"pp_secs": "PP_SECS", "exec_secs": "EXEC_SECS"}
+    stats = {}
+    for i, row in enumerate(rows):
+        if row[:4] == ["", "min", "max", "average"]:
+            for data_row in rows[i + 1:]:
+                if len(data_row) < 4 or not data_row[0]:
+                    break
+                name, avg = data_row[0], data_row[3]
+                if name in labels and avg:
+                    try:
+                        stats[labels[name]] = float(avg)
+                    except ValueError:
+                        pass
+            break
+    return stats
+
+
+def collect(results_dir):
+    """Return (sorted delays, {series_name: {delay: duration_secs}},
+    {delay: avg_rtt_ms})."""
+    by_round = {}
+    delays = []
+    avg_rtts = {}
+    for csv_path in sorted(results_dir.glob("results_delay=*.csv")):
+        m = FILENAME_RE.search(csv_path.name)
+        if not m:
+            continue
+        delay = int(m.group(1))
+        delays.append(delay)
+        for name, secs in parse_round_durations(csv_path).items():
+            by_round.setdefault(name, {})[delay] = secs
+        for name, secs in parse_secs_stats(csv_path).items():
+            by_round.setdefault(name, {})[delay] = secs
+        avg_rtt = parse_avg_rtt(csv_path)
+        if avg_rtt is not None:
+            avg_rtts[delay] = avg_rtt
+    return sorted(set(delays)), by_round, avg_rtts
+
+
+def plot_round(ax, round_name, delay_to_secs, all_delays):
+    xs = [d for d in all_delays if d in delay_to_secs]
+    ys = [delay_to_secs[d] for d in xs]
+    if not xs:
+        return False
+
+    color = ROUND_COLORS[round_name]
+    ax.plot(
+        xs, ys,
+        color=color, linewidth=2, marker=ROUND_MARKERS[round_name], markersize=7,
+        markerfacecolor=color, markeredgecolor="white", markeredgewidth=1.2,
+        label=round_name, zorder=3,
+    )
+    return True
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(f"Usage: {sys.argv[0]} <results-dir> [output-png]", file=sys.stderr)
+        sys.exit(1)
+
+    results_dir = Path(sys.argv[1])
+    out_path = Path(sys.argv[2]) if len(sys.argv) > 2 else results_dir / "plots" / "delay-sweep.png"
+
+    if not results_dir.is_dir():
+        print(f"ERROR: no such directory: {results_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    delays, by_round, avg_rtts = collect(results_dir)
+    if not delays:
+        print(f"ERROR: no results_delay=*.csv files found in {results_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    ROUND_ORDER = [
+        "Preprocessing", "InputMaskReservation", "InputCollection",
+        "MPCExecution", "OutputDistribution", "PP_SECS", "EXEC_SECS",
+    ]
+    rounds = [name for name in ROUND_ORDER if name in by_round]
+    if not rounds:
+        print("ERROR: no round had any data to plot", file=sys.stderr)
+        sys.exit(1)
+
+    fig, ax = plt.subplots(figsize=(8, 5.5), dpi=150)
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    plotted = [name for name in rounds if plot_round(ax, name, by_round[name], delays)]
+
+    ax.set_title("Round duration vs. network delay", color=TEXT_PRIMARY, fontsize=13, fontweight="bold", pad=10)
+    ax.set_xlabel("Configured delay / measured avg RTT (ms)", color=TEXT_SECONDARY, fontsize=10)
+    ax.set_ylabel("Duration (s)", color=TEXT_SECONDARY, fontsize=10)
+
+    ax.grid(axis="y", color=GRID_COLOR, linewidth=1, zorder=0)
+    ax.set_axisbelow(True)
+    for spine in ("top", "right", "left"):
+        ax.spines[spine].set_visible(False)
+    ax.spines["bottom"].set_color(GRID_COLOR)
+    ax.tick_params(colors=TEXT_SECONDARY, labelsize=8, length=0)
+    ax.set_xticks(delays)
+    ax.set_xticklabels([
+        f"{d}/{avg_rtts[d]:.1f}" if d in avg_rtts else str(d)
+        for d in delays
+    ])
+
+    ax.legend(
+        loc="upper left", bbox_to_anchor=(1.02, 1), frameon=False,
+        labelcolor=TEXT_SECONDARY, fontsize=9,
+    )
+
+    fig.tight_layout()
+    fig.savefig(out_path, facecolor="white", bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"Delays swept: {delays}")
+    print(f"Rounds plotted: {plotted}")
+    print(f"Wrote {out_path}")
+
+
+if __name__ == "__main__":
+    main()
