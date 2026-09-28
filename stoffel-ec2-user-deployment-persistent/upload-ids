@@ -1,0 +1,35 @@
+#!/bin/sh
+# Upload the ids/ directory (identity certs/keys) to the assets bucket, at
+# the path ./deploy fetches every node's certs/keys from before starting
+# its container. Unlike programs, the ids tree doesn't change per
+# execution - upload it once (and again whenever certs/keys are rotated),
+# then run ./deploy to pick it up. See the IdsS3Uri stack output.
+set -e
+
+usage() {
+    echo "Usage: $0 <local-ids-dir>" >&2
+    echo "  e.g.: $0 ../ids" >&2
+    exit 1
+}
+
+LOCAL_DIR="${1:?$(usage)}"
+[ -d "$LOCAL_DIR" ] || { echo "ERROR: $LOCAL_DIR is not a directory" >&2; exit 1; }
+
+STACK="StoffelEc2UserDeploymentPersistentStack"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+BUCKET=$(get_output AssetsBucketName)
+
+if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
+    echo "ERROR: could not retrieve AssetsBucketName from stack $STACK" >&2
+    exit 1
+fi
+
+echo "Uploading $LOCAL_DIR/ to s3://$BUCKET/ids/ ..."
+aws s3 sync "$LOCAL_DIR" "s3://$BUCKET/ids"
+echo "Done. Run ./deploy to restart the mesh with these certs/keys."

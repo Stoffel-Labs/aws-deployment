@@ -1,0 +1,59 @@
+#!/bin/sh
+# Removes one registered WebAuthn client: deletes its row from ClientRegistrationsTable (so it
+# disappears from ./list-registered-clients and start.html's voter picker) and, if it was ever
+# materialized, deletes its ids/pub/clients/{client_name}.crt file too.
+#
+# ClientRegistrationsTable is keyed by `token`, not `client_name` - this script scans for the
+# client_name you pass (same identifier ./list-registered-clients and the voter picker already
+# show you) to find the matching token, the same way ./materialize-registered-clients resolves
+# rows by scanning rather than by primary key.
+#
+# Removing the .crt file only takes effect on the live mesh after ./upload-ids && ./deploy -
+# every standing party loads its whole client catalog once at container startup
+# (StandingClientCatalog::load) and never rescans afterward, same as every other ids/ change.
+# Until you redeploy, an execution admitted with this identity would still succeed on the
+# already-running mesh even though it's gone from the picker and registration table.
+#
+# Usage: ./remove-registered-client <client_name>
+set -e
+
+STACK="StoffelEc2UserDeploymentPersistentStack"
+CLIENT_NAME="${1:?usage: ./remove-registered-client <client_name> - see ./list-registered-clients}"
+IDS_CLIENTS_DIR="$(cd "$(dirname "$0")" && pwd)/../ids/pub/clients"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+TABLE=$(get_output ClientRegistrationsTableName)
+if [ -z "$TABLE" ] || [ "$TABLE" = "None" ]; then
+    echo "ERROR: could not resolve ClientRegistrationsTableName from stack $STACK - has it been deployed?" >&2
+    exit 1
+fi
+
+TOKEN=$(aws dynamodb scan --table-name "$TABLE" \
+    --filter-expression "client_name = :name" \
+    --expression-attribute-values "{\":name\":{\"S\":\"$CLIENT_NAME\"}}" \
+    --query "Items[0].token.S" --output text)
+
+if [ -z "$TOKEN" ] || [ "$TOKEN" = "None" ]; then
+    echo "ERROR: no registration found with client_name '$CLIENT_NAME' - see ./list-registered-clients" >&2
+    exit 1
+fi
+
+aws dynamodb delete-item \
+    --table-name "$TABLE" \
+    --key "{\"token\":{\"S\":\"$TOKEN\"}}" \
+    >/dev/null
+echo "Removed $CLIENT_NAME from $TABLE."
+
+CRT="$IDS_CLIENTS_DIR/$CLIENT_NAME.crt"
+if [ -f "$CRT" ]; then
+    rm -f "$CRT"
+    echo "Deleted $CRT."
+    echo "This was materialized - run ./upload-ids && ./deploy to remove it from the live mesh too."
+else
+    echo "Was not materialized - nothing to remove from ids/pub/clients/."
+fi

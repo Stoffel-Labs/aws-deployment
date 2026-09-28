@@ -1,0 +1,372 @@
+execution_id: 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562
+status: RUNNING
+
+===== coordinator (2 lines) =====
+[2026-09-14T15:52:44.352000+00:00] BENCH_ROUND: Preprocessing ts=1789401164352
+[2026-09-14T15:52:44.401000+00:00] BENCH_ROUND: InputMaskReservation ts=1789401164401
+
+===== party0 (72 lines) =====
+[2026-09-14T15:52:43.714000+00:00] [party 4] RESERVOIR_ALLOCATION_STARTED execution=2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562
+[2026-09-14T15:52:44.344000+00:00] [party 4][execution 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562] reservoir allocation ready: program=7565f6ab21c1ee808ce27dcd125004e59d00dd5ff081912c75cd8fd2315ed512 generation=97f2f9d1 digest=68a576b981bd18ad3362657ffc583bad72d7078c3d93dbc22afb20e00b499500 allocated=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 } remaining=PoolAvailability { beaver: 0, random: 35, prand_bit: 0, prand_int: 0 } low=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 }
+[2026-09-14T15:52:44.347000+00:00] [party 4][execution 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562] starting online execution
+[2026-09-14T15:52:44.347000+00:00] [party 4] Creating MPC node opts (n_triples=0, n_random=5, n_prandbit=0, n_prandint=0, dynamic=false, timeout=600s)
+[2026-09-14T15:52:44.347000+00:00] [party 4] MPC node setup complete
+[2026-09-14T15:52:44.347000+00:00] [party 4] Starting execution inbox pump...
+[2026-09-14T15:52:44.347000+00:00] [party 4][execution 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562] Activated preallocated HB reservoir bundle; preprocessing_wait_ms=0
+[2026-09-14T15:52:44.352000+00:00] [party 4] proposing Preprocessing
+[2026-09-14T15:52:44.397000+00:00] [party 4] proposing InputMaskReservation
+[2026-09-14T15:52:44.446000+00:00] [party 4] waiting for reserved input indices
+[2026-09-14T15:53:21.456000+00:00] [2m2026-09-14T15:53:21.455881Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:22.300000+00:00] [2m2026-09-14T15:53:22.299903Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:23.171000+00:00] [2m2026-09-14T15:53:23.171384Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:24.010000+00:00] [2m2026-09-14T15:53:24.009937Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:24.819000+00:00] [2m2026-09-14T15:53:24.819621Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:25.638000+00:00] [2m2026-09-14T15:53:25.638695Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:26.449000+00:00] [2m2026-09-14T15:53:26.449684Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:27.318000+00:00] [2m2026-09-14T15:53:27.317959Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:28.130000+00:00] [2m2026-09-14T15:53:28.130433Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:28.963000+00:00] [2m2026-09-14T15:53:28.963720Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:29.790000+00:00] [2m2026-09-14T15:53:29.790789Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:30.674000+00:00] [2m2026-09-14T15:53:30.674278Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:31.539000+00:00] [2m2026-09-14T15:53:31.539777Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:32.368000+00:00] [2m2026-09-14T15:53:32.368254Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:33.205000+00:00] [2m2026-09-14T15:53:33.204835Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:34.036000+00:00] [2m2026-09-14T15:53:34.036104Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:34.845000+00:00] [2m2026-09-14T15:53:34.844937Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:35.644000+00:00] [2m2026-09-14T15:53:35.644389Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:36.470000+00:00] [2m2026-09-14T15:53:36.470126Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:37.316000+00:00] [2m2026-09-14T15:53:37.315940Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:38.183000+00:00] [2m2026-09-14T15:53:38.183431Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:38.996000+00:00] [2m2026-09-14T15:53:38.996235Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:39.795000+00:00] [2m2026-09-14T15:53:39.795215Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:40.694000+00:00] [2m2026-09-14T15:53:40.694744Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:41.521000+00:00] [2m2026-09-14T15:53:41.521744Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:42.354000+00:00] [2m2026-09-14T15:53:42.353850Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:43.218000+00:00] [2m2026-09-14T15:53:43.218843Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:47.077000+00:00] [2m2026-09-14T15:53:47.077327Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:47.947000+00:00] [2m2026-09-14T15:53:47.947686Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:48.821000+00:00] [2m2026-09-14T15:53:48.821443Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:49.708000+00:00] [2m2026-09-14T15:53:49.708378Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:50.523000+00:00] [2m2026-09-14T15:53:50.522935Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:51.317000+00:00] [2m2026-09-14T15:53:51.317508Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:52.139000+00:00] [2m2026-09-14T15:53:52.138927Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:52.957000+00:00] [2m2026-09-14T15:53:52.956975Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:53.789000+00:00] [2m2026-09-14T15:53:53.789051Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:54.596000+00:00] [2m2026-09-14T15:53:54.596741Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:55.489000+00:00] [2m2026-09-14T15:53:55.489284Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:56.354000+00:00] [2m2026-09-14T15:53:56.353974Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:57.228000+00:00] [2m2026-09-14T15:53:57.228622Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:58.095000+00:00] [2m2026-09-14T15:53:58.095053Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:58.908000+00:00] [2m2026-09-14T15:53:58.908107Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:59.781000+00:00] [2m2026-09-14T15:53:59.781614Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:00.637000+00:00] [2m2026-09-14T15:54:00.637637Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:01.482000+00:00] [2m2026-09-14T15:54:01.482662Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:02.279000+00:00] [2m2026-09-14T15:54:02.278981Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:03.120000+00:00] [2m2026-09-14T15:54:03.119980Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:03.933000+00:00] [2m2026-09-14T15:54:03.932995Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:04.797000+00:00] [2m2026-09-14T15:54:04.797462Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:05.677000+00:00] [2m2026-09-14T15:54:05.677823Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:06.480000+00:00] [2m2026-09-14T15:54:06.480219Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:07.330000+00:00] [2m2026-09-14T15:54:07.330758Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:08.219000+00:00] [2m2026-09-14T15:54:08.219035Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:09.262000+00:00] [2m2026-09-14T15:54:09.262317Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:10.215000+00:00] [2m2026-09-14T15:54:10.214869Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:11.205000+00:00] [2m2026-09-14T15:54:11.205182Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:12.195000+00:00] [2m2026-09-14T15:54:12.195678Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:13.212000+00:00] [2m2026-09-14T15:54:13.212433Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:14.166000+00:00] [2m2026-09-14T15:54:14.166653Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:15.111000+00:00] [2m2026-09-14T15:54:15.111236Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:15.994000+00:00] [2m2026-09-14T15:54:15.993964Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:16.934000+00:00] [2m2026-09-14T15:54:16.934795Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+
+===== party1 (71 lines) =====
+[2026-09-14T15:52:43.814000+00:00] [party 3] RESERVOIR_ALLOCATION_STARTED execution=2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562
+[2026-09-14T15:52:44.344000+00:00] [party 3][execution 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562] reservoir allocation ready: program=7565f6ab21c1ee808ce27dcd125004e59d00dd5ff081912c75cd8fd2315ed512 generation=97f2f9d1 digest=68a576b981bd18ad3362657ffc583bad72d7078c3d93dbc22afb20e00b499500 allocated=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 } remaining=PoolAvailability { beaver: 0, random: 35, prand_bit: 0, prand_int: 0 } low=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 }
+[2026-09-14T15:52:44.347000+00:00] [party 3][execution 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562] starting online execution
+[2026-09-14T15:52:44.348000+00:00] [party 3] Creating MPC node opts (n_triples=0, n_random=5, n_prandbit=0, n_prandint=0, dynamic=false, timeout=600s)
+[2026-09-14T15:52:44.348000+00:00] [party 3] MPC node setup complete
+[2026-09-14T15:52:44.348000+00:00] [party 3] Starting execution inbox pump...
+[2026-09-14T15:52:44.348000+00:00] [party 3][execution 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562] Activated preallocated HB reservoir bundle; preprocessing_wait_ms=0
+[2026-09-14T15:52:44.352000+00:00] [party 3] proposing Preprocessing
+[2026-09-14T15:52:44.407000+00:00] [party 3] proposing InputMaskReservation
+[2026-09-14T15:52:44.457000+00:00] [party 3] waiting for reserved input indices
+[2026-09-14T15:53:21.454000+00:00] [2m2026-09-14T15:53:21.453889Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:22.302000+00:00] [2m2026-09-14T15:53:22.302102Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:23.111000+00:00] [2m2026-09-14T15:53:23.110894Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:23.986000+00:00] [2m2026-09-14T15:53:23.986698Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:24.847000+00:00] [2m2026-09-14T15:53:24.846951Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:25.640000+00:00] [2m2026-09-14T15:53:25.639860Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:26.448000+00:00] [2m2026-09-14T15:53:26.448171Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:27.288000+00:00] [2m2026-09-14T15:53:27.288451Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:28.181000+00:00] [2m2026-09-14T15:53:28.181262Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:28.997000+00:00] [2m2026-09-14T15:53:28.996945Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:29.852000+00:00] [2m2026-09-14T15:53:29.852236Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:30.692000+00:00] [2m2026-09-14T15:53:30.692336Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:31.547000+00:00] [2m2026-09-14T15:53:31.546854Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:32.367000+00:00] [2m2026-09-14T15:53:32.367286Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:33.232000+00:00] [2m2026-09-14T15:53:33.232588Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:34.109000+00:00] [2m2026-09-14T15:53:34.109379Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:35.004000+00:00] [2m2026-09-14T15:53:35.004669Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:35.899000+00:00] [2m2026-09-14T15:53:35.899655Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:36.756000+00:00] [2m2026-09-14T15:53:36.756380Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:37.550000+00:00] [2m2026-09-14T15:53:37.550419Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:38.414000+00:00] [2m2026-09-14T15:53:38.414009Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:39.264000+00:00] [2m2026-09-14T15:53:39.264466Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:40.074000+00:00] [2m2026-09-14T15:53:40.074726Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:40.879000+00:00] [2m2026-09-14T15:53:40.879738Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:41.716000+00:00] [2m2026-09-14T15:53:41.715995Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:42.572000+00:00] [2m2026-09-14T15:53:42.572682Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:47.077000+00:00] [2m2026-09-14T15:53:47.077541Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:47.889000+00:00] [2m2026-09-14T15:53:47.889197Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:48.769000+00:00] [2m2026-09-14T15:53:48.769609Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:49.596000+00:00] [2m2026-09-14T15:53:49.596721Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:50.473000+00:00] [2m2026-09-14T15:53:50.472904Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:51.282000+00:00] [2m2026-09-14T15:53:51.282469Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:52.096000+00:00] [2m2026-09-14T15:53:52.096000Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:52.975000+00:00] [2m2026-09-14T15:53:52.974954Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:53.790000+00:00] [2m2026-09-14T15:53:53.790261Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:54.647000+00:00] [2m2026-09-14T15:53:54.647802Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:55.490000+00:00] [2m2026-09-14T15:53:55.490504Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:56.373000+00:00] [2m2026-09-14T15:53:56.373003Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:57.230000+00:00] [2m2026-09-14T15:53:57.230595Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:58.059000+00:00] [2m2026-09-14T15:53:58.059554Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:58.878000+00:00] [2m2026-09-14T15:53:58.878387Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:59.758000+00:00] [2m2026-09-14T15:53:59.758345Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:00.641000+00:00] [2m2026-09-14T15:54:00.641837Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:01.451000+00:00] [2m2026-09-14T15:54:01.451130Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:02.274000+00:00] [2m2026-09-14T15:54:02.273874Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:03.068000+00:00] [2m2026-09-14T15:54:03.068171Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:03.919000+00:00] [2m2026-09-14T15:54:03.919746Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:04.796000+00:00] [2m2026-09-14T15:54:04.796060Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:05.677000+00:00] [2m2026-09-14T15:54:05.677780Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:06.541000+00:00] [2m2026-09-14T15:54:06.541010Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:07.359000+00:00] [2m2026-09-14T15:54:07.359470Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:08.341000+00:00] [2m2026-09-14T15:54:08.341757Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:09.262000+00:00] [2m2026-09-14T15:54:09.262561Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:10.214000+00:00] [2m2026-09-14T15:54:10.213907Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:11.204000+00:00] [2m2026-09-14T15:54:11.203920Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:12.194000+00:00] [2m2026-09-14T15:54:12.194109Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:13.210000+00:00] [2m2026-09-14T15:54:13.209924Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:14.170000+00:00] [2m2026-09-14T15:54:14.170655Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:15.113000+00:00] [2m2026-09-14T15:54:15.113243Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:15.990000+00:00] [2m2026-09-14T15:54:15.990422Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:16.937000+00:00] [2m2026-09-14T15:54:16.937777Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+
+===== party2 (71 lines) =====
+[2026-09-14T15:52:43.789000+00:00] [party 2] RESERVOIR_ALLOCATION_STARTED execution=2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562
+[2026-09-14T15:52:44.344000+00:00] [party 2][execution 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562] reservoir allocation ready: program=7565f6ab21c1ee808ce27dcd125004e59d00dd5ff081912c75cd8fd2315ed512 generation=97f2f9d1 digest=68a576b981bd18ad3362657ffc583bad72d7078c3d93dbc22afb20e00b499500 allocated=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 } remaining=PoolAvailability { beaver: 0, random: 35, prand_bit: 0, prand_int: 0 } low=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 }
+[2026-09-14T15:52:44.347000+00:00] [party 2][execution 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562] starting online execution
+[2026-09-14T15:52:44.347000+00:00] [party 2] Creating MPC node opts (n_triples=0, n_random=5, n_prandbit=0, n_prandint=0, dynamic=false, timeout=600s)
+[2026-09-14T15:52:44.347000+00:00] [party 2] MPC node setup complete
+[2026-09-14T15:52:44.347000+00:00] [party 2] Starting execution inbox pump...
+[2026-09-14T15:52:44.347000+00:00] [party 2][execution 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562] Activated preallocated HB reservoir bundle; preprocessing_wait_ms=0
+[2026-09-14T15:52:44.352000+00:00] [party 2] proposing Preprocessing
+[2026-09-14T15:52:44.410000+00:00] [party 2] proposing InputMaskReservation
+[2026-09-14T15:52:44.460000+00:00] [party 2] waiting for reserved input indices
+[2026-09-14T15:53:21.456000+00:00] [2m2026-09-14T15:53:21.456037Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:22.346000+00:00] [2m2026-09-14T15:53:22.346817Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:23.154000+00:00] [2m2026-09-14T15:53:23.154643Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:23.967000+00:00] [2m2026-09-14T15:53:23.967638Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:24.788000+00:00] [2m2026-09-14T15:53:24.787903Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:25.669000+00:00] [2m2026-09-14T15:53:25.668898Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:26.499000+00:00] [2m2026-09-14T15:53:26.499464Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:27.316000+00:00] [2m2026-09-14T15:53:27.316687Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:28.184000+00:00] [2m2026-09-14T15:53:28.184682Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:29.068000+00:00] [2m2026-09-14T15:53:29.067989Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:29.940000+00:00] [2m2026-09-14T15:53:29.940047Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:30.760000+00:00] [2m2026-09-14T15:53:30.759858Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:31.606000+00:00] [2m2026-09-14T15:53:31.606590Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:32.485000+00:00] [2m2026-09-14T15:53:32.485102Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:33.348000+00:00] [2m2026-09-14T15:53:33.348578Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:34.211000+00:00] [2m2026-09-14T15:53:34.211108Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:35.104000+00:00] [2m2026-09-14T15:53:35.103853Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:35.900000+00:00] [2m2026-09-14T15:53:35.900594Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:36.758000+00:00] [2m2026-09-14T15:53:36.758667Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:37.607000+00:00] [2m2026-09-14T15:53:37.606903Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:38.409000+00:00] [2m2026-09-14T15:53:38.409734Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:39.272000+00:00] [2m2026-09-14T15:53:39.272669Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:40.136000+00:00] [2m2026-09-14T15:53:40.136180Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:40.982000+00:00] [2m2026-09-14T15:53:40.982706Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:41.836000+00:00] [2m2026-09-14T15:53:41.836278Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:42.727000+00:00] [2m2026-09-14T15:53:42.727509Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:47.079000+00:00] [2m2026-09-14T15:53:47.079388Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:47.967000+00:00] [2m2026-09-14T15:53:47.967566Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:48.808000+00:00] [2m2026-09-14T15:53:48.808114Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:49.689000+00:00] [2m2026-09-14T15:53:49.689068Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:50.484000+00:00] [2m2026-09-14T15:53:50.484208Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:51.304000+00:00] [2m2026-09-14T15:53:51.304037Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:52.167000+00:00] [2m2026-09-14T15:53:52.167744Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:52.962000+00:00] [2m2026-09-14T15:53:52.961994Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:53.829000+00:00] [2m2026-09-14T15:53:53.829037Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:54.704000+00:00] [2m2026-09-14T15:53:54.704506Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:55.575000+00:00] [2m2026-09-14T15:53:55.575298Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:56.425000+00:00] [2m2026-09-14T15:53:56.425329Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:57.298000+00:00] [2m2026-09-14T15:53:57.298823Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:58.100000+00:00] [2m2026-09-14T15:53:58.100557Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:58.924000+00:00] [2m2026-09-14T15:53:58.924595Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:59.786000+00:00] [2m2026-09-14T15:53:59.786325Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:00.598000+00:00] [2m2026-09-14T15:54:00.598333Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:01.483000+00:00] [2m2026-09-14T15:54:01.483642Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:02.325000+00:00] [2m2026-09-14T15:54:02.325154Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:03.207000+00:00] [2m2026-09-14T15:54:03.207641Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:04.094000+00:00] [2m2026-09-14T15:54:04.094750Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:04.943000+00:00] [2m2026-09-14T15:54:04.942964Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:05.796000+00:00] [2m2026-09-14T15:54:05.796512Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:06.680000+00:00] [2m2026-09-14T15:54:06.680270Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:07.574000+00:00] [2m2026-09-14T15:54:07.574541Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:08.463000+00:00] [2m2026-09-14T15:54:08.463319Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:09.396000+00:00] [2m2026-09-14T15:54:09.396798Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:10.401000+00:00] [2m2026-09-14T15:54:10.401293Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:11.397000+00:00] [2m2026-09-14T15:54:11.397374Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:12.398000+00:00] [2m2026-09-14T15:54:12.398675Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:13.358000+00:00] [2m2026-09-14T15:54:13.357915Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:14.307000+00:00] [2m2026-09-14T15:54:14.307438Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:15.115000+00:00] [2m2026-09-14T15:54:15.115171Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:15.996000+00:00] [2m2026-09-14T15:54:15.996749Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:16.852000+00:00] [2m2026-09-14T15:54:16.852749Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+
+===== party3 (71 lines) =====
+[2026-09-14T15:52:43.864000+00:00] [party 0] RESERVOIR_ALLOCATION_STARTED execution=2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562
+[2026-09-14T15:52:44.344000+00:00] [party 0][execution 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562] reservoir allocation ready: program=7565f6ab21c1ee808ce27dcd125004e59d00dd5ff081912c75cd8fd2315ed512 generation=97f2f9d1 digest=68a576b981bd18ad3362657ffc583bad72d7078c3d93dbc22afb20e00b499500 allocated=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 } remaining=PoolAvailability { beaver: 0, random: 35, prand_bit: 0, prand_int: 0 } low=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 }
+[2026-09-14T15:52:44.348000+00:00] [party 0][execution 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562] starting online execution
+[2026-09-14T15:52:44.348000+00:00] [party 0] Creating MPC node opts (n_triples=0, n_random=5, n_prandbit=0, n_prandint=0, dynamic=false, timeout=600s)
+[2026-09-14T15:52:44.348000+00:00] [party 0] MPC node setup complete
+[2026-09-14T15:52:44.348000+00:00] [party 0] Starting execution inbox pump...
+[2026-09-14T15:52:44.348000+00:00] [party 0][execution 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562] Activated preallocated HB reservoir bundle; preprocessing_wait_ms=0
+[2026-09-14T15:52:44.352000+00:00] [party 0] proposing Preprocessing
+[2026-09-14T15:52:44.400000+00:00] [party 0] proposing InputMaskReservation
+[2026-09-14T15:52:44.450000+00:00] [party 0] waiting for reserved input indices
+[2026-09-14T15:53:21.456000+00:00] [2m2026-09-14T15:53:21.456100Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:22.309000+00:00] [2m2026-09-14T15:53:22.309331Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:23.172000+00:00] [2m2026-09-14T15:53:23.172427Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:24.051000+00:00] [2m2026-09-14T15:53:24.051631Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:24.912000+00:00] [2m2026-09-14T15:53:24.912471Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:25.720000+00:00] [2m2026-09-14T15:53:25.719933Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:26.526000+00:00] [2m2026-09-14T15:53:26.526705Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:27.364000+00:00] [2m2026-09-14T15:53:27.364694Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:28.244000+00:00] [2m2026-09-14T15:53:28.244296Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:29.136000+00:00] [2m2026-09-14T15:53:29.136785Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:29.933000+00:00] [2m2026-09-14T15:53:29.933753Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:30.826000+00:00] [2m2026-09-14T15:53:30.826032Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:31.715000+00:00] [2m2026-09-14T15:53:31.715569Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:32.558000+00:00] [2m2026-09-14T15:53:32.558798Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:33.424000+00:00] [2m2026-09-14T15:53:33.423868Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:34.298000+00:00] [2m2026-09-14T15:53:34.298632Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:35.149000+00:00] [2m2026-09-14T15:53:35.149440Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:36.002000+00:00] [2m2026-09-14T15:53:36.002215Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:36.870000+00:00] [2m2026-09-14T15:53:36.869917Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:37.716000+00:00] [2m2026-09-14T15:53:37.715959Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:38.508000+00:00] [2m2026-09-14T15:53:38.508454Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:39.319000+00:00] [2m2026-09-14T15:53:39.319200Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:40.134000+00:00] [2m2026-09-14T15:53:40.134512Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:40.976000+00:00] [2m2026-09-14T15:53:40.976513Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:41.838000+00:00] [2m2026-09-14T15:53:41.838208Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:42.726000+00:00] [2m2026-09-14T15:53:42.726570Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:47.078000+00:00] [2m2026-09-14T15:53:47.078817Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:47.947000+00:00] [2m2026-09-14T15:53:47.947467Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:48.773000+00:00] [2m2026-09-14T15:53:48.773698Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:49.632000+00:00] [2m2026-09-14T15:53:49.632161Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:50.427000+00:00] [2m2026-09-14T15:53:50.426932Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:51.281000+00:00] [2m2026-09-14T15:53:51.281467Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:52.120000+00:00] [2m2026-09-14T15:53:52.120212Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:52.971000+00:00] [2m2026-09-14T15:53:52.971429Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:53.864000+00:00] [2m2026-09-14T15:53:53.864539Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:54.718000+00:00] [2m2026-09-14T15:53:54.718766Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:55.573000+00:00] [2m2026-09-14T15:53:55.573514Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:56.422000+00:00] [2m2026-09-14T15:53:56.422741Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:57.299000+00:00] [2m2026-09-14T15:53:57.299535Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:58.130000+00:00] [2m2026-09-14T15:53:58.130116Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:58.932000+00:00] [2m2026-09-14T15:53:58.932823Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:59.792000+00:00] [2m2026-09-14T15:53:59.792621Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:00.637000+00:00] [2m2026-09-14T15:54:00.637630Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:01.503000+00:00] [2m2026-09-14T15:54:01.503108Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:02.332000+00:00] [2m2026-09-14T15:54:02.332149Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:03.220000+00:00] [2m2026-09-14T15:54:03.220411Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:04.097000+00:00] [2m2026-09-14T15:54:04.097513Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:04.912000+00:00] [2m2026-09-14T15:54:04.912213Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:05.754000+00:00] [2m2026-09-14T15:54:05.753984Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:06.611000+00:00] [2m2026-09-14T15:54:06.610997Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:07.433000+00:00] [2m2026-09-14T15:54:07.433544Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:08.343000+00:00] [2m2026-09-14T15:54:08.343828Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:09.391000+00:00] [2m2026-09-14T15:54:09.391347Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:10.391000+00:00] [2m2026-09-14T15:54:10.391587Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:11.396000+00:00] [2m2026-09-14T15:54:11.395913Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:12.397000+00:00] [2m2026-09-14T15:54:12.397148Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:13.212000+00:00] [2m2026-09-14T15:54:13.212403Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:14.169000+00:00] [2m2026-09-14T15:54:14.168941Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:15.113000+00:00] [2m2026-09-14T15:54:15.113473Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:15.996000+00:00] [2m2026-09-14T15:54:15.996770Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:16.850000+00:00] [2m2026-09-14T15:54:16.850216Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+
+===== party4 (71 lines) =====
+[2026-09-14T15:52:43.839000+00:00] [party 1] RESERVOIR_ALLOCATION_STARTED execution=2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562
+[2026-09-14T15:52:44.344000+00:00] [party 1][execution 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562] reservoir allocation ready: program=7565f6ab21c1ee808ce27dcd125004e59d00dd5ff081912c75cd8fd2315ed512 generation=97f2f9d1 digest=68a576b981bd18ad3362657ffc583bad72d7078c3d93dbc22afb20e00b499500 allocated=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 } remaining=PoolAvailability { beaver: 0, random: 35, prand_bit: 0, prand_int: 0 } low=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 }
+[2026-09-14T15:52:44.347000+00:00] [party 1][execution 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562] starting online execution
+[2026-09-14T15:52:44.348000+00:00] [party 1] Creating MPC node opts (n_triples=0, n_random=5, n_prandbit=0, n_prandint=0, dynamic=false, timeout=600s)
+[2026-09-14T15:52:44.348000+00:00] [party 1] MPC node setup complete
+[2026-09-14T15:52:44.348000+00:00] [party 1] Starting execution inbox pump...
+[2026-09-14T15:52:44.348000+00:00] [party 1][execution 2afb8c86f655e824680d6f1875a70b9861ee94a5fd5fc19a3b0b19f87381d562] Activated preallocated HB reservoir bundle; preprocessing_wait_ms=0
+[2026-09-14T15:52:44.352000+00:00] [party 1] proposing Preprocessing
+[2026-09-14T15:52:44.397000+00:00] [party 1] proposing InputMaskReservation
+[2026-09-14T15:52:44.447000+00:00] [party 1] waiting for reserved input indices
+[2026-09-14T15:53:21.456000+00:00] [2m2026-09-14T15:53:21.456328Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:22.303000+00:00] [2m2026-09-14T15:53:22.303076Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:23.141000+00:00] [2m2026-09-14T15:53:23.141113Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:23.971000+00:00] [2m2026-09-14T15:53:23.971309Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:24.848000+00:00] [2m2026-09-14T15:53:24.848143Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:25.672000+00:00] [2m2026-09-14T15:53:25.672445Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:26.531000+00:00] [2m2026-09-14T15:53:26.531686Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:27.324000+00:00] [2m2026-09-14T15:53:27.324696Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:28.182000+00:00] [2m2026-09-14T15:53:28.182481Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:28.991000+00:00] [2m2026-09-14T15:53:28.991221Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:29.864000+00:00] [2m2026-09-14T15:53:29.864709Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:30.705000+00:00] [2m2026-09-14T15:53:30.705287Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:31.582000+00:00] [2m2026-09-14T15:53:31.582293Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:32.431000+00:00] [2m2026-09-14T15:53:32.431578Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:33.245000+00:00] [2m2026-09-14T15:53:33.245353Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:34.068000+00:00] [2m2026-09-14T15:53:34.068298Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:34.919000+00:00] [2m2026-09-14T15:53:34.919576Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:35.773000+00:00] [2m2026-09-14T15:53:35.773145Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:36.642000+00:00] [2m2026-09-14T15:53:36.641897Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:37.465000+00:00] [2m2026-09-14T15:53:37.464915Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:38.325000+00:00] [2m2026-09-14T15:53:38.325431Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:39.190000+00:00] [2m2026-09-14T15:53:39.190201Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:40.044000+00:00] [2m2026-09-14T15:53:40.044006Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:40.877000+00:00] [2m2026-09-14T15:53:40.877741Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:41.688000+00:00] [2m2026-09-14T15:53:41.688740Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:42.504000+00:00] [2m2026-09-14T15:53:42.504016Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:47.079000+00:00] [2m2026-09-14T15:53:47.079163Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:47.912000+00:00] [2m2026-09-14T15:53:47.912126Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:48.783000+00:00] [2m2026-09-14T15:53:48.783356Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:49.634000+00:00] [2m2026-09-14T15:53:49.634132Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:50.492000+00:00] [2m2026-09-14T15:53:50.492677Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:51.324000+00:00] [2m2026-09-14T15:53:51.324202Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:52.216000+00:00] [2m2026-09-14T15:53:52.216421Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:53.083000+00:00] [2m2026-09-14T15:53:53.082966Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:53.908000+00:00] [2m2026-09-14T15:53:53.908464Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:54.707000+00:00] [2m2026-09-14T15:53:54.707434Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:55.575000+00:00] [2m2026-09-14T15:53:55.575278Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:56.467000+00:00] [2m2026-09-14T15:53:56.467532Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:57.291000+00:00] [2m2026-09-14T15:53:57.291325Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:58.175000+00:00] [2m2026-09-14T15:53:58.175549Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:59.060000+00:00] [2m2026-09-14T15:53:59.060167Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:53:59.895000+00:00] [2m2026-09-14T15:53:59.895118Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:00.710000+00:00] [2m2026-09-14T15:54:00.709843Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:01.502000+00:00] [2m2026-09-14T15:54:01.502150Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:02.356000+00:00] [2m2026-09-14T15:54:02.356406Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:03.221000+00:00] [2m2026-09-14T15:54:03.221359Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:04.110000+00:00] [2m2026-09-14T15:54:04.109946Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:04.942000+00:00] [2m2026-09-14T15:54:04.941979Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:05.776000+00:00] [2m2026-09-14T15:54:05.776511Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:06.611000+00:00] [2m2026-09-14T15:54:06.611735Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:07.506000+00:00] [2m2026-09-14T15:54:07.505989Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:08.461000+00:00] [2m2026-09-14T15:54:08.461756Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:09.393000+00:00] [2m2026-09-14T15:54:09.393585Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:10.389000+00:00] [2m2026-09-14T15:54:10.389591Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:11.206000+00:00] [2m2026-09-14T15:54:11.206551Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:12.201000+00:00] [2m2026-09-14T15:54:12.201369Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:13.211000+00:00] [2m2026-09-14T15:54:13.211152Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:14.171000+00:00] [2m2026-09-14T15:54:14.171148Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:15.114000+00:00] [2m2026-09-14T15:54:15.114192Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:15.995000+00:00] [2m2026-09-14T15:54:15.995127Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown
+[2026-09-14T15:54:16.938000+00:00] [2m2026-09-14T15:54:16.937897Z[0m [33m WARN[0m [2mstoffel_mpc_coordinator_shared::rpc[0m[2m:[0m TLS handshake failed: received fatal alert: CertificateUnknown

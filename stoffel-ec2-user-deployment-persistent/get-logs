@@ -1,0 +1,96 @@
+#!/bin/sh
+# Fetch an execution's coordinator/party logs and print them in a readable
+# format (grouped by node, one message per line) instead of the raw JSON
+# blob GET /executions/{execution_id}/logs returns. Every fetch also
+# archives that formatted output to logs/<timestamp>-<execution_id>.txt -
+# same idea as ../stoffel-ec2-cross-region-deployment/run-nodes and
+# ../stoffel-docker-compose-one-off/run-nodes snapshotting a finished run
+# into logs/<RUN_TS>.txt, adapted for many concurrently-running executions
+# (hence the execution_id suffix - a bare timestamp isn't unique here the
+# way it is in those one-run-at-a-time deployments). The timestamp is the
+# execution's own start time (created_at), not fetch time, so re-fetching
+# the same execution's logs later overwrites the same archive file instead
+# of piling up duplicates.
+#
+# Since the coordinator/party containers run continuously across many
+# executions (not one per job), this is a best-effort time-window filter
+# around this execution's lifetime, not a clean per-execution log - lines
+# from other executions overlapping in time on the same node can appear
+# interleaved. See lambdas/get_logs.py.
+#
+# API_URL defaults to this deployment's endpoint; only set it to override.
+# Usage: API_KEY=... ./get-logs <execution_id> [output-file]
+set -e
+
+DEFAULT_API_URL="https://m29dm05475.execute-api.eu-north-1.amazonaws.com/prod"
+
+usage() {
+    echo "Usage: API_KEY=... $0 <execution_id> [output-file]" >&2
+    exit 1
+}
+
+[ $# -lt 1 ] && usage
+EXECUTION_ID="$1"
+OUTPUT_FILE="${2:-}"
+
+if [ -z "$API_KEY" ]; then
+    echo "ERROR: API_KEY is not set." >&2
+    exit 1
+fi
+API_URL="${API_URL:-$DEFAULT_API_URL}"
+API_URL="${API_URL%/}"
+
+RESPONSE=$(curl -sf "$API_URL/executions/$EXECUTION_ID/logs" -H "x-api-key: $API_KEY") || {
+    echo "ERROR: curl failed (exit $?) fetching logs for $EXECUTION_ID" >&2
+    exit 1
+}
+
+FORMATTED=$(echo "$RESPONSE" | python3 -c "
+import json
+import sys
+
+data = json.load(sys.stdin)
+
+if \"logs\" not in data:
+    print(f\"error: {data.get('error', data)}\")
+    sys.exit(0)
+
+print(f\"execution_id: {data.get('execution_id', '')}\")
+print(f\"status: {data.get('status', '')}\")
+print()
+
+for node, entries in data.get(\"logs\", {}).items():
+    print(f\"===== {node} ({len(entries)} lines) =====\")
+    for entry in entries:
+        if isinstance(entry, dict):
+            ts = entry.get(\"timestamp\") or \"\"
+            msg = entry.get(\"message\", \"\")
+            print(f\"[{ts}] {msg}\" if ts else msg)
+        else:
+            print(entry)
+    print()
+")
+
+# Name the archive by the execution's own start time (created_at), not
+# fetch time, falling back to now if it's missing (e.g. the execution row
+# itself wasn't found - see the "error" case above).
+ARCHIVE_TS=$(echo "$RESPONSE" | python3 -c "
+import datetime, json, sys
+data = json.load(sys.stdin)
+created_at = data.get('created_at')
+dt = datetime.datetime.fromisoformat(created_at) if created_at else datetime.datetime.now(datetime.timezone.utc)
+print(dt.strftime('%Y-%m-%dT%H-%M-%SZ'))
+")
+
+LOGS_DIR="$(dirname "$0")/logs"
+mkdir -p "$LOGS_DIR"
+ARCHIVE_FILE="$LOGS_DIR/${ARCHIVE_TS}-$EXECUTION_ID.txt"
+printf '%s\n' "$FORMATTED" > "$ARCHIVE_FILE"
+
+if [ -n "$OUTPUT_FILE" ]; then
+    printf '%s\n' "$FORMATTED" > "$OUTPUT_FILE"
+    echo "Wrote $OUTPUT_FILE"
+else
+    printf '%s\n' "$FORMATTED"
+fi
+echo "Archived to logs/$(basename "$ARCHIVE_FILE")" >&2

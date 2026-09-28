@@ -1,0 +1,60 @@
+#!/bin/sh
+# Lists every execution in ExecutionsTable directly via DynamoDB - the raw
+# admission/status state, as opposed to ./list-programs (which goes through
+# the operator API and needs an API key, not AWS credentials).
+#
+# Since check_execution_status_fn/finish_execution_fn were removed (see
+# app.py's history), nothing ever automatically marks an execution
+# SUCCEEDED or CANCELLED after it reaches RUNNING, and nothing cleans up
+# abandoned ones - nothing there is expected to keep polling it. Seeing
+# many rows stuck at RUNNING forever is normal now, not a sign of a stuck
+# poller; only FAILED (admission itself failed) and CANCELLED (an operator
+# explicitly cancelled - see ./cancel-execution) are ever written after the
+# fact.
+#
+# Usage: ./list-executions
+set -e
+
+STACK="StoffelEc2UserDeploymentPersistentStack"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+TABLE=$(get_output ExecutionsTableName)
+if [ -z "$TABLE" ] || [ "$TABLE" = "None" ]; then
+    echo "ERROR: could not resolve ExecutionsTableName from stack $STACK - has it been deployed?" >&2
+    exit 1
+fi
+
+aws dynamodb scan --table-name "$TABLE" --output json | python3 -c "
+import json
+import sys
+
+data = json.load(sys.stdin)
+items = data['Items']
+
+
+def get(item, key, default=''):
+    value = item.get(key)
+    if not value:
+        return default
+    return next(iter(value.values()))
+
+
+rows = sorted(items, key=lambda item: get(item, 'created_at'))
+print(f'{\"EXECUTION_ID\":<66}  {\"STATUS\":<10}  {\"PROGRAM\":<14}  {\"CREATED_AT\":<26}  ERROR')
+for item in rows:
+    print(
+        f'{get(item, \"execution_id\"):<66}  '
+        f'{get(item, \"status\"):<10}  '
+        f'{get(item, \"program_name\"):<14}  '
+        f'{get(item, \"created_at\"):<26}  '
+        f'{get(item, \"error\")[:80]}'
+    )
+print(f'\n{len(rows)} execution(s)')
+if data.get('LastEvaluatedKey'):
+    print('(table has more items than this one scan page returned)', file=sys.stderr)
+"

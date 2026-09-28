@@ -1,0 +1,302 @@
+#!/bin/sh
+# Operator-only direct debug tool: admit and start one execution on the
+# already-running standing mesh straight from your own AWS credentials,
+# bypassing the API/Lambdas entirely. Mirrors
+# ../stoffel-ec2-cross-region-deployment/standing-run, adapted to this
+# stack's single-region CDK outputs. This never restarts, replaces, or
+# otherwise touches the party/coordinator containers - it only drops a
+# `prepare` control command into each party's control directory over SSM
+# and waits for the resulting events, the same admission protocol
+# lambdas/party_control.py uses from the API path (minus that module's
+# per-party sequencing lock, since a human running this by hand isn't
+# racing concurrent admissions the way the API's Lambdas are).
+#
+# On success this writes client-env.sh in the same format the one-off
+# deployment's run-nodes always has, so ./run-client needs no changes at
+# all beyond requiring --execution-id/--program (see that script).
+#
+# Usage: ./run <program-name-or-.stflb-path-or-program-id> \
+#          [--entry <name>] [--n-clients <n>] [--clients cert0.crt:0,cert1.crt:1,...] \
+#          [--coordination-timeout <seconds>]
+set -e
+
+STACK="StoffelEc2UserDeploymentPersistentStack"
+
+usage() {
+    echo "Usage: $0 <program-name-or-.stflb-path-or-program-id> [--entry <name>] [--n-clients <n>] [--clients cert0.crt:0,...] [--coordination-timeout <seconds>]" >&2
+    exit 1
+}
+
+PROGRAM_ARG="${1:?$(usage)}"; shift
+
+ENTRY="main"
+N_CLIENTS=0
+CLIENTS_OVERRIDE=""
+COORDINATION_TIMEOUT=120
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --entry) ENTRY="$2"; shift 2 ;;
+        --n-clients) N_CLIENTS="$2"; shift 2 ;;
+        --clients) CLIENTS_OVERRIDE="$2"; shift 2 ;;
+        --coordination-timeout) COORDINATION_TIMEOUT="$2"; shift 2 ;;
+        *) echo "Unknown option: $1" >&2; usage ;;
+    esac
+done
+case "$COORDINATION_TIMEOUT" in ''|*[!0-9]*) echo "Invalid --coordination-timeout: $COORDINATION_TIMEOUT" >&2; usage ;; esac
+case "$N_CLIENTS" in ''|*[!0-9]*) echo "Invalid --n-clients: $N_CLIENTS" >&2; usage ;; esac
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+DEPLOYED_PARTIES=$(get_output DeployedParties)
+if [ -z "$DEPLOYED_PARTIES" ] || [ "$DEPLOYED_PARTIES" = "None" ]; then
+    echo "ERROR: could not resolve $STACK outputs - has it been deployed?" >&2
+    exit 1
+fi
+LAST_PARTY=$((DEPLOYED_PARTIES - 1))
+
+# --- Resolve program_id: accept a bare 64-hex digest directly, otherwise
+# treat the argument as a local .stflb (name or path) and hash it the same
+# way ./upload-program and StandingProgramCatalog::load do. ---
+if echo "$PROGRAM_ARG" | grep -qE '^[0-9a-f]{64}$'; then
+    PROGRAM_ID="$PROGRAM_ARG"
+else
+    case "$PROGRAM_ARG" in
+        /*|./*|../*) LOCAL_FILE="$PROGRAM_ARG" ;;
+        *.stflb)     LOCAL_FILE="$(dirname "$0")/../programs/$PROGRAM_ARG" ;;
+        *)           LOCAL_FILE="$(dirname "$0")/../programs/$PROGRAM_ARG.stflb" ;;
+    esac
+    BINARY="$(dirname "$0")/../StoffelVM/target/release/stoffel-run"
+    if [ ! -f "$BINARY" ]; then
+        echo "ERROR: $BINARY not found — run 'cargo build --release' in ../StoffelVM/" >&2
+        exit 1
+    fi
+    if [ ! -f "$LOCAL_FILE" ]; then
+        echo "ERROR: $LOCAL_FILE not found" >&2
+        exit 1
+    fi
+    PROGRAM_ID=$("$BINARY" --print-program-id "$LOCAL_FILE" | grep -Eo '[0-9a-f]{64}' | tail -n 1)
+    if [ -z "$PROGRAM_ID" ]; then
+        echo "ERROR: could not derive a program ID for $LOCAL_FILE" >&2
+        exit 1
+    fi
+fi
+
+# --- Build the client roster (JSON array of {certificate, manifest_slot}). ---
+if [ -n "$CLIENTS_OVERRIDE" ]; then
+    CLIENTS_JSON=$(python3 -c "
+import json, sys
+clients = []
+for item in sys.argv[1].split(','):
+    cert, slot = item.split(':')
+    clients.append({'certificate': cert, 'manifest_slot': int(slot)})
+print(json.dumps(clients))
+" "$CLIENTS_OVERRIDE")
+elif [ "$N_CLIENTS" -gt 0 ]; then
+    CLIENTS_DIR="$(dirname "$0")/../ids/pub/clients"
+    CERT_LIST=$(ls "$CLIENTS_DIR" | grep -E '^client[0-9]+\.crt$' | sort -V | head -n "$N_CLIENTS")
+    CLIENTS_JSON=$(python3 -c "
+import json, sys
+certs = sys.argv[1:]
+print(json.dumps([{'certificate': c, 'manifest_slot': i} for i, c in enumerate(certs)]))
+" $CERT_LIST)
+else
+    CLIENTS_JSON="[]"
+fi
+
+EXECUTION_ID=$(openssl rand -hex 32)
+
+PAYLOAD=$(python3 -c "
+import json, sys
+execution_id, program_id, entry, clients_json = sys.argv[1:5]
+clients = json.loads(clients_json)
+payload = {
+    'operation': 'prepare',
+    'admission': {
+        'execution_id': execution_id,
+        'program_id': program_id,
+        'entry': entry,
+        'clients': clients,
+    },
+}
+print(json.dumps(payload, separators=(',', ':')))
+" "$EXECUTION_ID" "$PROGRAM_ID" "$ENTRY" "$CLIENTS_JSON")
+
+echo "Admitting execution..."
+echo "  execution id: $EXECUTION_ID"
+echo "  program id:   $PROGRAM_ID"
+echo "  entry:        $ENTRY"
+echo "  clients:      $CLIENTS_JSON"
+
+ACK_TIMEOUT=30
+
+# send_ssm <instance-id> <script-file>
+send_ssm() {
+    PARAMS_FILE=$(mktemp)
+    python3 -c "
+import json, sys
+instance, script_file = sys.argv[1:3]
+with open(script_file) as f:
+    script = f.read()
+print(json.dumps({
+    'DocumentName': 'AWS-RunShellScript',
+    'InstanceIds': [instance],
+    'Parameters': {'commands': [script]},
+}))
+" "$@" > "$PARAMS_FILE"
+    aws ssm send-command --cli-input-json "file://$PARAMS_FILE" \
+        --query 'Command.CommandId' --output text
+    rm -f "$PARAMS_FILE"
+}
+
+# wait_ssm <instance-id> <command-id> <label> [<max-wait-seconds>]
+wait_ssm() {
+    INSTANCE="$1"; CMD_ID="$2"; LABEL="$3"; MAX_WAIT="${4:-1800}"
+    ELAPSED=0
+    while :; do
+        STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+            --query 'Status' --output text 2>/dev/null || echo "Pending")
+        case "$STATUS" in
+            Success)
+                aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                    --query 'StandardOutputContent' --output text
+                return 0
+                ;;
+            Cancelled|TimedOut|Failed|Cancelling)
+                echo "ERROR: SSM command failed for $LABEL ($INSTANCE): $STATUS" >&2
+                aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                    --query '[StandardOutputContent,StandardErrorContent]' --output text >&2
+                exit 1
+                ;;
+        esac
+        if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
+            echo "ERROR: SSM command for $LABEL ($INSTANCE) still $STATUS after ${MAX_WAIT}s, giving up" >&2
+            exit 1
+        fi
+        sleep 5
+        ELAPSED=$((ELAPSED + 5))
+    done
+}
+
+# build_prepare_wait_script <party-id> - see
+# ../stoffel-ec2-cross-region-deployment/standing-run for the identical
+# protocol, delivered the same way (python3 - <<'PYEOF' heredoc, positional
+# argv, so none of the remote script's own $/backtick/quote characters need
+# escaping here).
+build_prepare_wait_script() {
+    python3 - "$1" "$PAYLOAD" "$EXECUTION_ID" "$ACK_TIMEOUT" "$COORDINATION_TIMEOUT" <<'PYEOF'
+import sys
+party_id, payload, execution_id, ack_timeout, ready_timeout = sys.argv[1:6]
+events = f"/home/ec2-user/standing/control/events/party{party_id}"
+commands = "/home/ec2-user/standing/control/commands"
+script = f"""set -e
+EVENTS={events}
+COMMANDS={commands}
+mkdir -p "$EVENTS" "$COMMANDS"
+NEXT=$(( $(ls -1 "$EVENTS" 2>/dev/null | grep -vc '^async-' || true) + 1 ))
+SEQ=$(printf '%020d' "$NEXT")
+TMP="$COMMANDS/.tmp.$$"
+cat > "$TMP" <<'STOFFEL_PAYLOAD_EOF'
+{payload}
+STOFFEL_PAYLOAD_EOF
+mv "$TMP" "$COMMANDS/$SEQ.json"
+ACK="$EVENTS/$SEQ.json"
+DEADLINE=$(( $(date +%s) + {ack_timeout} ))
+while [ ! -f "$ACK" ]; do
+  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+    echo "ERROR: no acknowledgement for command $SEQ within {ack_timeout}s" >&2
+    exit 3
+  fi
+  sleep 0.2
+done
+cat "$ACK"
+if ! grep -q '"outcome":"event"' "$ACK"; then
+  exit 2
+fi
+READY="$EVENTS/async-{execution_id}-ready.json"
+FAILED="$EVENTS/async-{execution_id}-failed.json"
+CANCELLED="$EVENTS/async-{execution_id}-cancelled.json"
+DEADLINE=$(( $(date +%s) + {ready_timeout} ))
+while :; do
+  if [ -f "$READY" ]; then echo '---READY---'; cat "$READY"; exit 0; fi
+  if [ -f "$FAILED" ]; then echo '---FAILED---'; cat "$FAILED"; exit 4; fi
+  if [ -f "$CANCELLED" ]; then echo '---CANCELLED---'; cat "$CANCELLED"; exit 5; fi
+  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+    echo "ERROR: execution {execution_id} did not reach ready/failed/cancelled within {ready_timeout}s" >&2
+    exit 6
+  fi
+  sleep 0.2
+done
+"""
+sys.stdout.write(script)
+PYEOF
+}
+
+OUTDIR=$(mktemp -d)
+OUTER_TIMEOUT=$((ACK_TIMEOUT + COORDINATION_TIMEOUT + 60))
+
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    INSTANCE=$(get_output "Party${IDX}InstanceId")
+    eval "PARTY_INSTANCE_$IDX=\$INSTANCE"
+    SCRIPT=$(mktemp)
+    build_prepare_wait_script "$IDX" > "$SCRIPT"
+    CMD_ID=$(send_ssm "$INSTANCE" "$SCRIPT")
+    rm -f "$SCRIPT"
+    eval "CMD_ID_$IDX=\$CMD_ID"
+    echo "  party${IDX} command: $CMD_ID"
+    IDX=$((IDX + 1))
+done
+
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    eval "INSTANCE=\$PARTY_INSTANCE_$IDX"
+    eval "CMD_ID=\$CMD_ID_$IDX"
+    (
+        wait_ssm "$INSTANCE" "$CMD_ID" "party${IDX} prepare" "$OUTER_TIMEOUT" > "$OUTDIR/party${IDX}.out" 2> "$OUTDIR/party${IDX}.err"
+    ) &
+    eval "WAIT_PID_$IDX=\$!"
+    IDX=$((IDX + 1))
+done
+
+FAILED=0
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    eval "PID=\$WAIT_PID_$IDX"
+    if wait "$PID"; then
+        echo "  party${IDX}: ready"
+    else
+        FAILED=1
+        echo "  party${IDX}: FAILED" >&2
+        sed 's/^/    /' "$OUTDIR/party${IDX}.err" "$OUTDIR/party${IDX}.out" >&2 2>/dev/null
+    fi
+    IDX=$((IDX + 1))
+done
+rm -rf "$OUTDIR"
+
+if [ "$FAILED" -ne 0 ]; then
+    echo "Admission failed on at least one party. Cancel any partial admission with:" >&2
+    echo "  ./cancel-execution $EXECUTION_ID   (needs an API key)" >&2
+    exit 1
+fi
+
+COORD_PUBLIC_IP=$(get_output CoordPublicIp)
+{
+    echo "#!/bin/sh"
+    echo "COORD_PUBLIC_IP=$COORD_PUBLIC_IP"
+    echo "N_PARTIES=$DEPLOYED_PARTIES"
+    echo "EXECUTION_ID=$EXECUTION_ID"
+    IDX=0
+    while [ "$IDX" -le "$LAST_PARTY" ]; do
+        IP=$(get_output "Party${IDX}PublicIp")
+        echo "PARTY${IDX}_PUBLIC_IP=$IP"
+        IDX=$((IDX + 1))
+    done
+} > client-env.sh
+
+echo ""
+echo "Execution ${EXECUTION_ID} is ready on all ${DEPLOYED_PARTIES} parties."
+echo "Wrote client-env.sh — run './run-client <client_id> <inputs> --program $PROGRAM_ARG' as usual."

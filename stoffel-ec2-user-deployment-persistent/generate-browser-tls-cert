@@ -1,0 +1,102 @@
+#!/bin/sh
+# Generates a self-signed browser TLS certificate covering the coordinator's
+# and every party's current public IP (the exact set of endpoints a browser
+# needs to trust - see stoffel-mpc-coordinator's browser_rpc module for why
+# this listener exists separately from the native mutual-TLS one). Does NOT
+# upload it - run ./upload-browser-tls-cert <cert> <key> yourself once
+# you're happy with what got generated, then ./deploy to pick it up.
+#
+# TESTING ONLY. This certificate is self-signed, so no browser trusts it
+# automatically - for each endpoint it covers, visit
+# https://<that-ip>:<its-browser-port>/ directly in the browser first and
+# click through the security warning there, before the voting page tries to
+# open a WebSocket to that same host:port. That one-time-per-endpoint,
+# per-browser exception is what makes it usable at all; there is no prompt
+# for a script-initiated WebSocket connection itself. For a real deployment,
+# use a CA-issued certificate (Let's Encrypt/ACM) instead of this script -
+# every voter would otherwise have to repeat that click-through too.
+#
+# Requires openssl. Regenerate whenever the stack's IPs change (e.g. after a
+# fresh `cdk deploy`) - a cert without a given IP in its SAN list will not
+# be trusted for that endpoint even after accepting the warning for the
+# others.
+#
+# Usage: ./generate-browser-tls-cert [--days <n>] [--out-dir <dir>]
+set -e
+
+STACK="StoffelEc2UserDeploymentPersistentStack"
+DAYS=365
+OUT_DIR="./browser-tls-cert"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --days) DAYS="$2"; shift 2 ;;
+        --out-dir) OUT_DIR="$2"; shift 2 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+command -v openssl >/dev/null 2>&1 || { echo "ERROR: openssl is required" >&2; exit 1; }
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+NUM_PARTIES=$(get_output DeployedParties)
+if [ -z "$NUM_PARTIES" ] || [ "$NUM_PARTIES" = "None" ]; then
+    echo "ERROR: could not resolve $STACK outputs - has it been deployed?" >&2
+    exit 1
+fi
+LAST_PARTY=$((NUM_PARTIES - 1))
+
+COORD_IP=$(get_output CoordPublicIp)
+if [ -z "$COORD_IP" ] || [ "$COORD_IP" = "None" ]; then
+    echo "ERROR: could not resolve CoordPublicIp" >&2
+    exit 1
+fi
+
+echo "Certificate will cover:"
+echo "  coordinator: $COORD_IP"
+SAN="IP:${COORD_IP}"
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    PARTY_IP=$(get_output "Party${IDX}PublicIp")
+    if [ -z "$PARTY_IP" ] || [ "$PARTY_IP" = "None" ]; then
+        echo "ERROR: could not resolve Party${IDX}PublicIp" >&2
+        exit 1
+    fi
+    echo "  party${IDX}:     $PARTY_IP"
+    SAN="${SAN},IP:${PARTY_IP}"
+    IDX=$((IDX + 1))
+done
+
+mkdir -p "$OUT_DIR"
+CERT="$OUT_DIR/cert.pem"
+KEY="$OUT_DIR/key.pem"
+
+openssl req -x509 -newkey rsa:2048 -nodes -days "$DAYS" \
+    -keyout "$KEY" -out "$CERT" \
+    -subj "/CN=stoffel-voting-test" \
+    -addext "subjectAltName=$SAN"
+
+chmod 600 "$KEY"
+
+echo ""
+echo "Generated $CERT / $KEY (self-signed, valid $DAYS days)."
+echo ""
+echo "Next:"
+echo "  ./upload-browser-tls-cert $CERT $KEY"
+echo "  ./deploy"
+echo ""
+echo "Then, before opening the voting page, visit each of these directly in"
+echo "the browser and accept its security warning:"
+echo "  https://${COORD_IP}:31416/"
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    PARTY_IP=$(get_output "Party${IDX}PublicIp")
+    PORT=$((18180 + IDX))
+    echo "  https://${PARTY_IP}:${PORT}/"
+    IDX=$((IDX + 1))
+done

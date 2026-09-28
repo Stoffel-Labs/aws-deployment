@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#e8f1ec" />
+    <title>Start an election · Stoffel</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <a class="wordmark" href="./index.html" aria-label="Stoffel private voting">
+          <span class="wordmark-mark" aria-hidden="true">S/5</span>
+          <span>Stoffel private voting</span>
+        </a>
+        <div class="network-state" aria-live="polite">
+          <span class="state-dot" id="state-dot"></span>
+          <span id="network-state">Enter deployment details</span>
+        </div>
+      </header>
+
+      <section class="hero" aria-labelledby="page-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Operator only · admits one execution</p>
+          <h1 id="page-title">Start a new election.</h1>
+          <p class="lede">
+            Admits one fresh voting execution on an already-running AWS mesh
+            (<code>stoffel-ec2-user-deployment-persistent</code>) and hands you a link for the
+            three voters. This page never sees any vote — it only calls the deployment's
+            <code>POST /executions</code> API.
+          </p>
+        </div>
+      </section>
+
+      <section class="workbench">
+        <form class="ballot" id="start-form">
+          <div class="ballot-head">
+            <span>Deployment</span>
+            <span class="range-note">operator credentials</span>
+          </div>
+
+          <label class="text-field">
+            <span>API URL</span>
+            <input id="api-url" type="url" placeholder="https://xxxx.execute-api.region.amazonaws.com/prod" required />
+          </label>
+
+          <label class="text-field">
+            <span>API key</span>
+            <input id="api-key" type="password" autocomplete="off" placeholder="from ./get-api-key" required />
+          </label>
+
+          <button class="compute" id="load-voters-button" type="button">
+            <span>Load registered voters</span>
+          </button>
+
+          <div class="ballot-head">
+            <span>Voters</span>
+            <span class="range-note">one registered identity each, all three distinct</span>
+          </div>
+
+          <label class="text-field">
+            <span>Voter 1</span>
+            <select id="voter-0" required disabled>
+              <option value="">Load registered voters first</option>
+            </select>
+          </label>
+          <label class="text-field">
+            <span>Voter 2</span>
+            <select id="voter-1" required disabled>
+              <option value="">Load registered voters first</option>
+            </select>
+          </label>
+          <label class="text-field">
+            <span>Voter 3</span>
+            <select id="voter-2" required disabled>
+              <option value="">Load registered voters first</option>
+            </select>
+          </label>
+
+          <button class="compute" id="start-button" type="submit" disabled>
+            <span>Start election</span>
+            <span aria-hidden="true">→</span>
+          </button>
+
+          <p class="form-note">
+            Staged once via <code>./upload-program voting</code> on the deployment; this just
+            admits an execution of it for the three selected voters. Requires the mesh to have
+            browser TLS enabled (<code>./upload-browser-tls-cert</code> + <code>./deploy</code>),
+            and each voter to already be registered and materialized
+            (<code>./generate-registration-link</code>, <code>./materialize-registered-clients</code>,
+            <code>./deploy</code>).
+          </p>
+        </form>
+
+        <aside class="result-panel" id="result-panel" hidden>
+          <div class="result-label">Execution</div>
+          <div class="result-proof">
+            <label class="text-field text-field-tight">
+              <span>Execution ID</span>
+              <input id="result-execution-id" type="text" readonly />
+            </label>
+            <button class="compute copy-link" id="copy-execution-id" type="button">
+              <span>Copy</span>
+            </button>
+            <label class="text-field text-field-tight">
+              <span>Send this link to all three voters</span>
+              <input id="vote-link" type="text" readonly />
+            </label>
+            <button class="compute copy-link" id="copy-link" type="button">
+              <span>Copy</span>
+            </button>
+          </div>
+        </aside>
+
+        <p class="form-note" id="cancelled-note" hidden>
+          That election was cancelled. Pick voters and start a new one whenever you're ready.
+        </p>
+      </section>
+
+      <p class="form-note" id="result-error" role="alert" hidden></p>
+    </main>
+
+    <script type="module" src="./start.js"></script>
+  </body>
+</html>

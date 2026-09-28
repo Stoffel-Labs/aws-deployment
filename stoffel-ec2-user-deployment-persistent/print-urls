@@ -1,0 +1,50 @@
+#!/bin/sh
+# Prints every URL an operator or voter needs for this deployment: the web site and API
+# front doors, plus the coordinator's and every party's browser-TLS endpoint - same host:port
+# as the coordinator_browser/party{i}_browser values in endpoints/config.json and the
+# ?coordinator=/?node0=.. params start.js's voteLinkFor bakes into a vote link, printed here
+# as https:// rather than the wss:// scheme app.js's resolveEndpoints() actually connects
+# with, since both name the same TLS endpoint - wss:// is just the WebSocket-upgrade form of
+# the same host:port a plain https:// request would reach.
+#
+# Elastic IPs are fixed at `cdk deploy` time (see app.py's _add_eip) - identical for every
+# execution ever admitted on this mesh, so these never change between deploys unless the
+# stack's EIPs themselves are replaced.
+#
+# Usage: ./print-urls
+set -e
+
+STACK="StoffelEc2UserDeploymentPersistentStack"
+COORD_BROWSER_PORT=31416
+PARTY_BROWSER_RPC_BASE_PORT=18180
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+WEB_URL=$(get_output WebUrl)
+API_URL=$(get_output ApiUrl)
+COORD_IP=$(get_output CoordPublicIp)
+NUM_PARTIES=$(get_output DeployedParties)
+
+if [ -z "$COORD_IP" ] || [ "$COORD_IP" = "None" ]; then
+    echo "ERROR: could not resolve stack outputs from $STACK - has it been deployed?" >&2
+    exit 1
+fi
+
+echo "Web site:    ${WEB_URL:-<not deployed>}"
+echo "API:         ${API_URL:-<not deployed>}"
+echo ""
+echo "Browser (https://) endpoints:"
+echo "  coordinator: https://${COORD_IP}:${COORD_BROWSER_PORT}"
+
+IDX=0
+LAST_PARTY=$((NUM_PARTIES - 1))
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    PARTY_IP=$(get_output "Party${IDX}PublicIp")
+    PORT=$((PARTY_BROWSER_RPC_BASE_PORT + IDX))
+    echo "  party${IDX}:      https://${PARTY_IP}:${PORT}"
+    IDX=$((IDX + 1))
+done

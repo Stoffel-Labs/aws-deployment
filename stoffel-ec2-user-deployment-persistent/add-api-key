@@ -1,0 +1,76 @@
+#!/bin/sh
+# Create a new API key for a user, optionally rate-limited, and attach it to a usage plan on
+# this stack's API. Does NOT need `cdk deploy` - everything here is created directly via the
+# AWS CLI (see app.py's _add_api and README's "Onboarding additional users").
+#
+# API Gateway throttle/quota settings live on the usage plan, not the key, and apply
+# identically to every key attached to that plan - there's no way to give two keys sharing
+# one plan different limits. So a rate-limited key gets its own dedicated usage plan (named
+# "<key-name>-plan"); an unlimited key gets a plan with no throttle/quota set at all, bounded
+# only by the AWS account's own default API Gateway throttle, not by anything this script
+# sets. ./revoke-api-key deletes this key's plan along with the key itself.
+#
+# Usage: ./add-api-key <username> [rate-limit] [burst-limit]
+#   <username>    required
+#   rate-limit    steady-state requests/second for this key. Omit (or pass "unlimited") for
+#                 no rate limit.
+#   burst-limit   burst capacity above rate-limit. Defaults to 2x rate-limit if omitted.
+#   e.g.: ./add-api-key alice              # unlimited
+#         ./add-api-key bob 5              # 5 req/s, burst 10
+#         ./add-api-key carol 5 20         # 5 req/s, burst 20
+set -e
+
+STACK="StoffelEc2UserDeploymentPersistentStack"
+STAGE="prod"
+USER="$1"
+RATE_LIMIT="$2"
+BURST_LIMIT="$3"
+
+if [ -z "$USER" ]; then
+    echo "Usage: $0 <username> [rate-limit] [burst-limit]" >&2
+    exit 1
+fi
+[ "$RATE_LIMIT" = "unlimited" ] && RATE_LIMIT=""
+
+KEY_NAME="stoffel-$USER"
+PLAN_NAME="$KEY_NAME-plan"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+API_ID=$(get_output ApiId)
+if [ -z "$API_ID" ] || [ "$API_ID" = "None" ]; then
+    echo "ERROR: could not retrieve ApiId from stack $STACK" >&2
+    exit 1
+fi
+
+EXISTING=$(aws apigateway get-api-keys --name-query "$KEY_NAME" --query "items[?name=='$KEY_NAME'].id" --output text)
+if [ -n "$EXISTING" ] && [ "$EXISTING" != "None" ]; then
+    echo "ERROR: an API key named '$KEY_NAME' already exists (id: $EXISTING)" >&2
+    exit 1
+fi
+
+KEY_ID=$(aws apigateway create-api-key --name "$KEY_NAME" --enabled --query id --output text)
+
+if [ -n "$RATE_LIMIT" ]; then
+    BURST_LIMIT="${BURST_LIMIT:-$(python3 -c "import math; print(max(1, math.ceil(float('$RATE_LIMIT') * 2)))")}"
+    PLAN_ID=$(aws apigateway create-usage-plan --name "$PLAN_NAME" \
+        --api-stages "apiId=$API_ID,stage=$STAGE" \
+        --throttle "rateLimit=$RATE_LIMIT,burstLimit=$BURST_LIMIT" \
+        --query id --output text)
+    echo "Created usage plan '$PLAN_NAME' (id: $PLAN_ID) - rate ${RATE_LIMIT}/s, burst $BURST_LIMIT" >&2
+else
+    PLAN_ID=$(aws apigateway create-usage-plan --name "$PLAN_NAME" \
+        --api-stages "apiId=$API_ID,stage=$STAGE" \
+        --query id --output text)
+    echo "Created usage plan '$PLAN_NAME' (id: $PLAN_ID) - unlimited (no throttle)" >&2
+fi
+
+aws apigateway create-usage-plan-key --usage-plan-id "$PLAN_ID" \
+    --key-id "$KEY_ID" --key-type API_KEY >/dev/null
+
+echo "Created API key '$KEY_NAME' (id: $KEY_ID), attached to usage plan $PLAN_ID" >&2
+aws apigateway get-api-key --api-key "$KEY_ID" --include-value --query value --output text

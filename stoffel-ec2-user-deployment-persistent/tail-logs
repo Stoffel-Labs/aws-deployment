@@ -1,0 +1,50 @@
+#!/bin/sh
+# Tails the coordinator/party containers' raw CloudWatch logs directly - no
+# execution ID needed, unlike ./get-logs (which only shows a best-effort
+# time-window around one execution's lifetime via GET
+# /executions/{id}/logs). Useful for anything execution-scoped logs can't
+# show: container startup/crash output, the standing control pump, ./deploy
+# runs, or just watching the mesh live. Every node's log stream is named
+# "<node>/<deploy-id>" (see ./deploy's build_coord_script/build_party_script)
+# and deploy-id changes on every ./deploy, so this filters by *prefix*
+# ("coordinator/", "party0/", ...) rather than a fixed stream name.
+#
+# Usage:
+#   ./tail-logs                       # every node, last 10m
+#   ./tail-logs party2                # just party2, last 10m
+#   ./tail-logs coordinator --follow  # live tail, like `tail -f`
+#   ./tail-logs -- --since 1h         # any node, last hour
+set -e
+
+STACK="StoffelEc2UserDeploymentPersistentStack"
+
+usage() {
+    echo "Usage: $0 [node] [--since <duration>] [--follow]" >&2
+    echo "  node: coordinator, party0, party1, ... (omit for every node)" >&2
+    exit 1
+}
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+NODE=""
+case "$1" in
+    -h|--help) usage ;;
+    ""|--*) ;;
+    *) NODE="$1"; shift ;;
+esac
+
+LOG_GROUP=$(get_output LogGroupName)
+if [ -z "$LOG_GROUP" ] || [ "$LOG_GROUP" = "None" ]; then
+    echo "ERROR: could not resolve LogGroupName from stack $STACK - has it been deployed?" >&2
+    exit 1
+fi
+
+if [ -n "$NODE" ]; then
+    exec aws logs tail "$LOG_GROUP" --log-stream-name-prefix "$NODE/" "$@"
+else
+    exec aws logs tail "$LOG_GROUP" "$@"
+fi

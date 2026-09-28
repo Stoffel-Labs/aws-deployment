@@ -1,0 +1,55 @@
+#!/bin/sh
+# Lists every row in ClientRegistrationsTable directly via DynamoDB - both links issued and
+# not yet used (used_at empty, materialized shows "no") and completed registrations
+# (used_at set). A completed registration only becomes usable in an execution's --clients
+# list once ./materialize-registered-clients has turned it into a .crt file and ./deploy has
+# picked that up - "materialized" here reflects that, not just whether the voter registered.
+#
+# Usage: ./list-registered-clients
+set -e
+
+STACK="StoffelEc2UserDeploymentPersistentStack"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+TABLE=$(get_output ClientRegistrationsTableName)
+if [ -z "$TABLE" ] || [ "$TABLE" = "None" ]; then
+    echo "ERROR: could not resolve ClientRegistrationsTableName from stack $STACK - has it been deployed?" >&2
+    exit 1
+fi
+
+aws dynamodb scan --table-name "$TABLE" --output json | python3 -c "
+import json
+import sys
+
+data = json.load(sys.stdin)
+items = data['Items']
+
+
+def get(item, key, default=''):
+    value = item.get(key)
+    if not value:
+        return default
+    return next(iter(value.values()))
+
+
+rows = sorted(items, key=lambda item: get(item, 'created_at'))
+print(f'{\"CLIENT_NAME\":<28}  {\"LABEL\":<20}  {\"REGISTERED\":<10}  {\"MATERIALIZED\":<12}  CREATED_AT')
+for item in rows:
+    registered = 'yes' if get(item, 'used_at') else 'no'
+    materialized = 'yes' if get(item, 'materialized_at') else 'no'
+    print(
+        f'{get(item, \"client_name\"):<28}  '
+        f'{get(item, \"label\")[:20]:<20}  '
+        f'{registered:<10}  '
+        f'{materialized:<12}  '
+        f'{get(item, \"created_at\")}'
+    )
+print(f'\n{len(rows)} registration link(s)')
+if data.get('LastEvaluatedKey'):
+    print('(table has more items than this one scan page returned)', file=sys.stderr)
+"

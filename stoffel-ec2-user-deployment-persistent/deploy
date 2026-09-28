@@ -1,0 +1,482 @@
+#!/bin/sh
+# (Re)start the persistent standing-node mesh: the off-chain coordinator and
+# every party, each as a long-lived `stoffel-run --standing-node` container
+# that stays up across many executions instead of being replaced per run.
+# Mirrors ../stoffel-ec2-cross-region-deployment/standing-deploy, adapted to
+# a single-region CDK stack (this deployment always runs the mesh across
+# every deployed party - there's no --num-parties subset option here, unlike
+# that script).
+#
+# This is the ONLY script that ever touches the containers. ./upload-program
+# and ./upload-ids never restart anything - a program you stage isn't
+# runnable until you redeploy, because each standing node loads its whole
+# program catalog once at container startup (see StandingProgramCatalog::load
+# in ../StoffelVM) and never rescans its --program-dir afterward. Re-run this
+# script whenever you:
+#   - staged new programs (via ./upload-program) that should become runnable,
+#   - rotated the ids/ tree (via ./upload-ids),
+#   - published a new StoffelVM/coordinator image (`cdk deploy`), or
+#   - just want a clean mesh.
+#
+# Redeploying interrupts every execution currently in flight on the mesh -
+# that's inherent to StoffelVM's standing-node design, not something this
+# script adds. See app.py's docstring for why program upload therefore has
+# no self-service API path.
+#
+# Usage: ./deploy [--threshold <t>] [--reservoir-burst-capacity <n>] [--ready-timeout <seconds>]
+set -e
+
+STACK="StoffelEc2UserDeploymentPersistentStack"
+CONTAINER_NAME="stoffel-standing"
+
+THRESHOLD=1
+RESERVOIR_BURST_CAPACITY=9
+READY_TIMEOUT=300
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --threshold) THRESHOLD="$2"; shift 2 ;;
+        --reservoir-burst-capacity) RESERVOIR_BURST_CAPACITY="$2"; shift 2 ;;
+        --ready-timeout) READY_TIMEOUT="$2"; shift 2 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+case "$THRESHOLD" in ''|*[!0-9]*) echo "Invalid --threshold: $THRESHOLD" >&2; exit 1 ;; esac
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+NUM_PARTIES=$(get_output DeployedParties)
+if [ -z "$NUM_PARTIES" ] || [ "$NUM_PARTIES" = "None" ]; then
+    echo "ERROR: could not resolve $STACK outputs - has it been deployed?" >&2
+    exit 1
+fi
+MIN_PARTIES=$((2 * THRESHOLD + 1))
+if [ "$NUM_PARTIES" -lt "$MIN_PARTIES" ]; then
+    echo "ERROR: $NUM_PARTIES parties deployed, but threshold $THRESHOLD needs at least $MIN_PARTIES" >&2
+    echo "  redeploy the stack with a bigger --context num_parties, or use a smaller --threshold here" >&2
+    exit 1
+fi
+LAST_PARTY=$((NUM_PARTIES - 1))
+
+REGION="$(aws configure get region)"
+DEPLOY_ID="$(date +%s)-$$"
+AUTH_TOKEN="${STOFFEL_AUTH_TOKEN:-1}"
+
+# standing_pool_id - deterministic nonzero 64-hex pool ID for this mesh's
+# physical identity, derived from the AWS account ID so every operator on
+# the same account computes the same value without sharing a state file.
+# The preprocessing reservoir's identity is derived from this (see
+# standing_preproc_pool_program_id in stoffel-run), so it MUST stay stable
+# across ./deploy runs or every restart looks like a fresh mesh and rebuilds
+# preprocessing from scratch. Override with STOFFEL_STANDING_POOL_ID for an
+# isolated/test deployment.
+standing_pool_id() {
+    if [ -n "${STOFFEL_STANDING_POOL_ID:-}" ]; then
+        echo "$STOFFEL_STANDING_POOL_ID"
+        return 0
+    fi
+    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    python3 -c "
+import hashlib, sys
+account = sys.argv[1]
+print(hashlib.sha256(b'stoffel-ec2-user-persistent-standing-pool-v1\x00' + account.encode()).hexdigest())
+" "$ACCOUNT_ID"
+}
+POOL_ID=$(standing_pool_id)
+
+# send_ssm <instance-id> <script-file> — sends the script as a single
+# AWS-RunShellScript command (via --cli-input-json so multi-line scripts
+# with quotes don't have to survive being embedded in a CLI arg) and prints
+# the command id.
+send_ssm() {
+    PARAMS_FILE=$(mktemp)
+    python3 -c "
+import json, sys
+instance, script_file = sys.argv[1:3]
+with open(script_file) as f:
+    script = f.read()
+print(json.dumps({
+    'DocumentName': 'AWS-RunShellScript',
+    'InstanceIds': [instance],
+    'Parameters': {'commands': [script]},
+}))
+" "$@" > "$PARAMS_FILE"
+    aws ssm send-command --cli-input-json "file://$PARAMS_FILE" \
+        --query 'Command.CommandId' --output text
+    rm -f "$PARAMS_FILE"
+}
+
+# wait_ssm <instance-id> <command-id> <label> [<max-wait-seconds>]
+wait_ssm() {
+    INSTANCE="$1"; CMD_ID="$2"; LABEL="$3"; MAX_WAIT="${4:-600}"
+    ELAPSED=0
+    while :; do
+        STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+            --query 'Status' --output text 2>/dev/null || echo "Pending")
+        case "$STATUS" in
+            Success) return 0 ;;
+            Cancelled|TimedOut|Failed|Cancelling)
+                echo "ERROR: SSM command failed for $LABEL ($INSTANCE): $STATUS" >&2
+                aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                    --query '[StandardOutputContent,StandardErrorContent]' --output text >&2
+                exit 1
+                ;;
+        esac
+        if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
+            echo "ERROR: SSM command for $LABEL ($INSTANCE) still $STATUS after ${MAX_WAIT}s, giving up" >&2
+            exit 1
+        fi
+        sleep 5
+        ELAPSED=$((ELAPSED + 5))
+    done
+}
+
+LOG_GROUP=$(get_output LogGroupName)
+COORD_INSTANCE=$(get_output CoordInstanceId)
+COORD_IMAGE_URI=$(get_output CoordImageUri)
+PARTY_IMAGE_URI=$(get_output PartyImageUri)
+ASSETS_BUCKET=$(get_output AssetsBucketName)
+PARTY_CONTROL_TABLE=$(get_output PartyControlTableName)
+if [ -z "$PARTY_CONTROL_TABLE" ] || [ "$PARTY_CONTROL_TABLE" = "None" ]; then
+    echo "ERROR: could not resolve PartyControlTableName from stack $STACK" >&2
+    exit 1
+fi
+
+# Browser TLS is entirely optional and auto-detected: if ./upload-browser-tls-cert
+# has ever uploaded a cert chain + key, every container gets a second listener
+# for browser clients (see stoffel-mpc-coordinator's browser_rpc module) in
+# addition to the native mTLS one; otherwise the mesh runs exactly as it did
+# before browser support existed. Coordinator port and per-party port range
+# are fixed (not operator-configurable) since browsers hardcode them.
+COORD_BROWSER_PORT=31416
+PARTY_BROWSER_RPC_BASE_PORT=18180
+BROWSER_TLS_ENABLED=1
+for KEY in browser-tls/cert-chain.pem browser-tls/key.pem; do
+    ERROR=$(aws s3api head-object --bucket "$ASSETS_BUCKET" --key "$KEY" 2>&1 >/dev/null) || {
+        echo "  browser TLS: s3://$ASSETS_BUCKET/$KEY not accessible - $ERROR" >&2
+        BROWSER_TLS_ENABLED=""
+    }
+done
+
+# The WebAuthn relying party ID (--webauthn-rp-id on both run-coord and stoffel-run) has to
+# be the voting *website's* own hostname - the origin navigator.credentials.get()/create()
+# actually run against in the voter's browser (register.html/webauthn-session.js both use
+# window.location.hostname) - not anything about the coordinator's own network identity. The
+# CloudFront domain (WebUrl) is exactly that hostname, so it's derived here rather than
+# operator-supplied; only resolved/required when browser TLS is actually enabled, since
+# WebAuthn binding only exists on that listener.
+WEBAUTHN_RP_ID=""
+if [ -n "$BROWSER_TLS_ENABLED" ]; then
+    WEB_URL=$(get_output WebUrl)
+    if [ -z "$WEB_URL" ] || [ "$WEB_URL" = "None" ]; then
+        echo "ERROR: could not resolve WebUrl from stack $STACK - needed for --webauthn-rp-id" >&2
+        exit 1
+    fi
+    WEBAUTHN_RP_ID=$(echo "$WEB_URL" | sed -E 's#^https?://##; s#/.*$##')
+fi
+
+echo "Deploying standing mesh..."
+echo "  parties:     ${NUM_PARTIES}"
+echo "  threshold:   ${THRESHOLD}"
+echo "  pool id:     ${POOL_ID}"
+if [ -n "$BROWSER_TLS_ENABLED" ]; then
+    echo "  browser TLS: enabled (coordinator :${COORD_BROWSER_PORT}, parties from :${PARTY_BROWSER_RPC_BASE_PORT})"
+    echo "  webauthn rp: ${WEBAUTHN_RP_ID}"
+else
+    echo "  browser TLS: disabled (run ./upload-browser-tls-cert to enable, then re-deploy)"
+fi
+
+NODE_CERTS=""
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    eval "PARTY_INSTANCE_$IDX=\$(get_output Party${IDX}InstanceId)"
+    eval "CHECK=\$PARTY_INSTANCE_$IDX"
+    if [ -z "$CHECK" ] || [ "$CHECK" = "None" ]; then
+        echo "ERROR: could not resolve Party${IDX}InstanceId" >&2
+        exit 1
+    fi
+    NODE_CERTS="${NODE_CERTS:+$NODE_CERTS,}/app/ids/pub/nodes/node${IDX}.crt"
+    IDX=$((IDX + 1))
+done
+PARTY0_PRIVATE_IP=$(aws ec2 describe-instances --instance-ids "$PARTY_INSTANCE_0" \
+    --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+COORD_PRIVATE_IP=$(aws ec2 describe-instances --instance-ids "$COORD_INSTANCE" \
+    --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+
+# Every party needs the full roster's public certificates under
+# --party-cert-dir, which stoffel-run's standing loader requires named
+# cert<n>.crt (load_standing_party_public_keys) - the ids/ tree instead
+# names them node<n>.crt, so re-derive the party-certs roster on the
+# instance rather than uploading a second copy to S3.
+node_certs_snippet() {
+    SNIPPET="mkdir -p /home/ec2-user/standing/party-certs;"
+    I=0
+    while [ "$I" -le "$LAST_PARTY" ]; do
+        SNIPPET="$SNIPPET cp /home/ec2-user/ids/pub/nodes/node${I}.crt /home/ec2-user/standing/party-certs/cert${I}.crt;"
+        I=$((I + 1))
+    done
+    echo "$SNIPPET"
+}
+
+# build_coord_script <log-group> <stream> <image> <bucket> <auth-token> <n> <t> <node-certs> \
+#   <ready-timeout> <browser-enabled> <browser-port> <webauthn-rp-id>
+build_coord_script() {
+    python3 -c "
+import sys
+(region, log_group, stream, image, bucket, auth_token, container, n, t, node_certs, ready_timeout,
+ browser_enabled, browser_port, webauthn_rp_id) = sys.argv[1:15]
+registry = image.split('/')[0]
+run_coord_args = (
+    '--addr 0.0.0.0 '
+    f'--server-cert /app/ids/pub/coord.crt --server-key /app/ids/priv/coord.der '
+    f'--n {n} --t {t} '
+    f'--initial-mpc-nodes {node_certs}'
+)
+browser_volume = ''
+if browser_enabled:
+    run_coord_args += (
+        f' --browser-addr 0.0.0.0 --browser-port {browser_port} '
+        '--browser-tls-cert-chain /app/browser-tls/cert-chain.pem '
+        '--browser-tls-key /app/browser-tls/key.pem '
+        f'--webauthn-rp-id {webauthn_rp_id}'
+    )
+    browser_volume = '-v /home/ec2-user/browser-tls:/app/browser-tls:ro '
+lines = [
+    'set -e',
+    f'aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {registry}',
+    'mkdir -p /home/ec2-user/ids',
+    f'aws s3 cp --recursive s3://{bucket}/ids/ /home/ec2-user/ids/',
+] + ([
+    'mkdir -p /home/ec2-user/browser-tls',
+    f'aws s3 cp --recursive s3://{bucket}/browser-tls/ /home/ec2-user/browser-tls/',
+] if browser_enabled else []) + [
+    f'docker pull {image}',
+    f'docker rm -f {container} >/dev/null 2>&1 || true',
+    f'docker run -d --name {container} --network host --restart unless-stopped --log-driver awslogs '
+    f'--log-opt awslogs-region={region} --log-opt awslogs-group={log_group} --log-opt awslogs-stream={stream} '
+    f'-v /home/ec2-user/ids:/app/ids:ro {browser_volume}'
+    f'-e STOFFEL_AUTH_TOKEN=\"{auth_token}\" '
+    f'--entrypoint /app/run-coord {image} {run_coord_args}',
+    'DEADLINE=\$((\$(date +%s) + ' + ready_timeout + '))',
+    'while :; do',
+    f'  if docker logs {container} 2>&1 | grep -q \"Listening on\"; then echo \"{container} ready\"; break; fi',
+    f'  if ! docker ps -q -f name={container} | grep -q .; then',
+    f'    echo \"ERROR: {container} exited during startup\" >&2; docker logs {container} 2>&1 | tail -n 100 >&2; exit 1',
+    '  fi',
+    '  if [ \"\$(date +%s)\" -ge \"\$DEADLINE\" ]; then',
+    f'    echo \"ERROR: {container} did not report ready within {ready_timeout}s\" >&2; docker logs {container} 2>&1 | tail -n 100 >&2; exit 1',
+    '  fi',
+    '  sleep 2',
+    'done',
+]
+print('\n'.join(lines))
+" "$@"
+}
+
+echo "Starting coordinator..."
+COORD_SCRIPT=$(mktemp)
+build_coord_script "$REGION" "$LOG_GROUP" "coordinator/$DEPLOY_ID" "$COORD_IMAGE_URI" "$ASSETS_BUCKET" "$AUTH_TOKEN" \
+    "$CONTAINER_NAME" "$NUM_PARTIES" "$THRESHOLD" "$NODE_CERTS" "$READY_TIMEOUT" \
+    "$BROWSER_TLS_ENABLED" "$COORD_BROWSER_PORT" "$WEBAUTHN_RP_ID" > "$COORD_SCRIPT"
+COORD_CMD_ID=$(send_ssm "$COORD_INSTANCE" "$COORD_SCRIPT")
+rm -f "$COORD_SCRIPT"
+wait_ssm "$COORD_INSTANCE" "$COORD_CMD_ID" "coordinator" "$((READY_TIMEOUT + 60))" >/dev/null
+echo "  ready"
+
+# build_party_script <party-id> <bind-port> <rpc-port> <bucket> <certs-snippet> \
+#   <n> <t> <coord-addr> <bootstrap-addr-or-empty> <advertise-ip> <pool-id> \
+#   <burst> <region> <log-group> <stream> <image> <auth-token> <container> <ready-timeout> \
+#   <browser-enabled> <browser-rpc-port> <webauthn-rp-id>
+build_party_script() {
+    python3 -c "
+import sys
+(party_id, bind_port, rpc_port, bucket, certs_snippet, n, t, coord_addr, bootstrap_addr,
+ advertise_ip, pool_id, burst, region, log_group, stream, image, auth_token, container, ready_timeout,
+ browser_enabled, browser_rpc_port, webauthn_rp_id) = sys.argv[1:23]
+
+leader_args = '--leader' if party_id == '0' else ''
+bootstrap_args = f'--bootstrap {bootstrap_addr}' if bootstrap_addr else ''
+# party0 (the leader/bootnode) advertises its bootstrap listener on
+# bind_port+1000 (10000 for the default 9000 bind port - see the SG's
+# explicit port-10000 rule in app.py), distinct from its own bind port;
+# every other party advertises exactly its bind port. Matches
+# ../stoffel-ec2-cross-region-deployment/standing-deploy.
+advertise_addr = f'{advertise_ip}:{int(bind_port) + 1000}' if party_id == '0' else f'{advertise_ip}:{bind_port}'
+
+run_args = (
+    '--standing-node '
+    '--control-dir /home/ec2-user/standing/control '
+    '--program-dir /home/ec2-user/standing/programs '
+    '--client-cert-dir /app/ids/pub/clients '
+    '--party-cert-dir /home/ec2-user/standing/party-certs '
+    f'--reservoir-burst-capacity {burst} '
+    f'--pool-id {pool_id} '
+    f'--off-chain-coord {coord_addr} '
+    f'--rpc-bind 0.0.0.0:{rpc_port} '
+    f'{leader_args} {bootstrap_args} '
+    f'--party-id {party_id} '
+    f'--bind 0.0.0.0:{bind_port} '
+    f'--advertise {advertise_addr} '
+    f'--n-parties {n} --threshold {t} '
+    f'--cert /app/ids/pub/nodes/node{party_id}.crt --key /app/ids/priv/nodes/node{party_id}.der '
+    '--preproc-store /home/ec2-user/standing/preproc '
+    '--local-store /home/ec2-user/standing/local/vm.redb'
+)
+browser_volume = ''
+if browser_enabled:
+    run_args += (
+        f' --browser-rpc-bind 0.0.0.0:{browser_rpc_port} '
+        '--browser-tls-cert-chain /app/browser-tls/cert-chain.pem '
+        '--browser-tls-key /app/browser-tls/key.pem '
+        f'--webauthn-rp-id {webauthn_rp_id}'
+    )
+    browser_volume = '-v /home/ec2-user/browser-tls:/app/browser-tls:ro '
+
+registry = image.split('/')[0]
+lines = [
+    'set -e',
+    f'aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {registry}',
+    'mkdir -p /home/ec2-user/standing/programs /home/ec2-user/standing/preproc /home/ec2-user/standing/local /home/ec2-user/standing/control',
+    'mkdir -p /home/ec2-user/ids',
+    f'aws s3 cp --recursive s3://{bucket}/ids/ /home/ec2-user/ids/',
+    certs_snippet,
+    f'aws s3 sync s3://{bucket}/standing-programs/ /home/ec2-user/standing/programs/',
+] + ([
+    'mkdir -p /home/ec2-user/browser-tls',
+    f'aws s3 cp --recursive s3://{bucket}/browser-tls/ /home/ec2-user/browser-tls/',
+] if browser_enabled else []) + [
+    f'docker pull {image}',
+    f'docker rm -f {container} >/dev/null 2>&1 || true',
+    f'docker run -d --name {container} --network host --restart unless-stopped --log-driver awslogs '
+    f'--log-opt awslogs-region={region} --log-opt awslogs-group={log_group} --log-opt awslogs-stream={stream} '
+    f'-v /home/ec2-user/standing:/home/ec2-user/standing '
+    f'-v /home/ec2-user/ids:/app/ids:ro {browser_volume}'
+    f'-e STOFFEL_AUTH_TOKEN=\"{auth_token}\" -e RUST_LOG=info -e RUST_BACKTRACE=1 '
+    f'--entrypoint /app/stoffel-run {image} {run_args}',
+    'DEADLINE=\$((\$(date +%s) + ' + ready_timeout + '))',
+    'while :; do',
+    f'  if docker logs {container} 2>&1 | grep -q \"standing node ready:\"; then echo \"{container} ready\"; break; fi',
+    f'  if ! docker ps -q -f name={container} | grep -q .; then',
+    f'    echo \"ERROR: {container} exited during startup\" >&2; docker logs {container} 2>&1 | tail -n 150 >&2; exit 1',
+    '  fi',
+    '  if [ \"\$(date +%s)\" -ge \"\$DEADLINE\" ]; then',
+    f'    echo \"ERROR: {container} did not report ready within {ready_timeout}s\" >&2; docker logs {container} 2>&1 | tail -n 150 >&2; exit 1',
+    '  fi',
+    '  sleep 2',
+    'done',
+]
+print('\n'.join(lines))
+" "$@"
+}
+
+COORD_ADDR="${COORD_PRIVATE_IP}:31415"
+BOOTSTRAP_ADDR="${PARTY0_PRIVATE_IP}:9000"
+
+# party0 is the leader/bootnode: its own "standing node ready:" line is
+# printed only after every party has registered with it (StoffelVM's
+# discovery/bootnode.rs "Mesh ready" gate), so it must never be launched-
+# then-waited-on before parties 1..N exist. Every party's container is
+# started first; only then do we wait on all of them together.
+echo "Starting party0..."
+PARTY0_SCRIPT=$(mktemp)
+build_party_script "0" "9000" "16180" "$ASSETS_BUCKET" "$(node_certs_snippet)" \
+    "$NUM_PARTIES" "$THRESHOLD" "$COORD_ADDR" "" "$PARTY0_PRIVATE_IP" "$POOL_ID" "$RESERVOIR_BURST_CAPACITY" \
+    "$REGION" "$LOG_GROUP" "party0/$DEPLOY_ID" "$PARTY_IMAGE_URI" "$AUTH_TOKEN" "$CONTAINER_NAME" "$READY_TIMEOUT" \
+    "$BROWSER_TLS_ENABLED" "$PARTY_BROWSER_RPC_BASE_PORT" "$WEBAUTHN_RP_ID" \
+    > "$PARTY0_SCRIPT"
+CMD_ID_0=$(send_ssm "$PARTY_INSTANCE_0" "$PARTY0_SCRIPT")
+rm -f "$PARTY0_SCRIPT"
+echo "  party0 command: $CMD_ID_0"
+
+if [ "$LAST_PARTY" -ge 1 ]; then
+    echo "Starting parties 1-${LAST_PARTY}..."
+    IDX=1
+    while [ "$IDX" -le "$LAST_PARTY" ]; do
+        eval "INSTANCE=\$PARTY_INSTANCE_$IDX"
+        PARTY_PRIVATE_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE" \
+            --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+        BIND_PORT=$((9000 + IDX))
+        RPC_PORT=$((16180 + IDX))
+        BROWSER_RPC_PORT=$((PARTY_BROWSER_RPC_BASE_PORT + IDX))
+        SCRIPT=$(mktemp)
+        build_party_script "$IDX" "$BIND_PORT" "$RPC_PORT" "$ASSETS_BUCKET" "$(node_certs_snippet)" \
+            "$NUM_PARTIES" "$THRESHOLD" "$COORD_ADDR" "$BOOTSTRAP_ADDR" "$PARTY_PRIVATE_IP" "$POOL_ID" "$RESERVOIR_BURST_CAPACITY" \
+            "$REGION" "$LOG_GROUP" "party${IDX}/$DEPLOY_ID" "$PARTY_IMAGE_URI" "$AUTH_TOKEN" "$CONTAINER_NAME" "$READY_TIMEOUT" \
+            "$BROWSER_TLS_ENABLED" "$BROWSER_RPC_PORT" "$WEBAUTHN_RP_ID" \
+            > "$SCRIPT"
+        CMD_ID=$(send_ssm "$INSTANCE" "$SCRIPT")
+        rm -f "$SCRIPT"
+        eval "CMD_ID_$IDX=\$CMD_ID"
+        echo "  party${IDX} command: $CMD_ID"
+        IDX=$((IDX + 1))
+    done
+fi
+
+echo "  Waiting for parties 0-${LAST_PARTY} to report ready..."
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    eval "INSTANCE=\$PARTY_INSTANCE_$IDX"
+    eval "CMD_ID=\$CMD_ID_$IDX"
+    wait_ssm "$INSTANCE" "$CMD_ID" "party${IDX}" "$((READY_TIMEOUT + 60))" >/dev/null
+    echo "  party${IDX} ready"
+    IDX=$((IDX + 1))
+done
+
+# Self-heals each party's DynamoDB command-sequence counter (party_control.py's `seq`) to
+# match what that party's own local control journal actually expects next. The two are
+# independent stores that can drift: `seq` lives in DynamoDB and outlives any one EC2
+# instance/local-state generation, while StandingNodeControl's cursor (StoffelVM's
+# standing_control.rs load_cursor) is derived purely from this instance's own
+# events/party{N}/*.json files. Whenever a party's local state is fresher than the counter
+# (a replaced instance, a wiped volume, a brand-new deployment reusing an existing table),
+# every future admission gets delivered at a sequence number that party has already moved
+# past waiting for - permanent, silent admission deadlock (no error, no log line - it just
+# never acks). Safe to always run: this is the same journal contiguity guarantee
+# StandingNodeControl itself enforces (see load_cursor in the same file), so a party's
+# events directory is always exactly N contiguous files 1..N with no gaps - counting them
+# directly gives the party's true last-acked sequence, and this only ever runs right after
+# that same party has freshly reported ready, never during an admission in flight.
+#
+# Counting must match load_cursor's own filter exactly: it only recognizes a file whose
+# whole stem parses as a plain u64 (see standing_control.rs - `file_stem()?.parse::<u64>()`),
+# so a bare `*.json` glob overcounts by however many non-numeric event files are also in that
+# directory - specifically the async-<execution-id>-ready.json/-failed.json lifecycle event
+# files StandingNodeControl also writes there (see write_async_event in the same file), which
+# load_cursor correctly skips but a naive glob would not. `[0-9]*.json` matches only the
+# zero-padded numeric sequence files (`{sequence:020}.json`), same as load_cursor.
+echo "  Syncing party control sequence counters to each party's local state..."
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    eval "INSTANCE=\$PARTY_INSTANCE_$IDX"
+    SEQ_SCRIPT=$(mktemp)
+    echo "ls /home/ec2-user/standing/control/events/party${IDX}/[0-9]*.json 2>/dev/null | wc -l | tr -d ' '" > "$SEQ_SCRIPT"
+    SEQ_CMD_ID=$(send_ssm "$INSTANCE" "$SEQ_SCRIPT")
+    rm -f "$SEQ_SCRIPT"
+    wait_ssm "$INSTANCE" "$SEQ_CMD_ID" "party${IDX}-seq-sync" 30 >/dev/null
+    LOCAL_SEQ=$(aws ssm get-command-invocation --command-id "$SEQ_CMD_ID" --instance-id "$INSTANCE" \
+        --query 'StandardOutputContent' --output text | tr -d '[:space:]')
+    case "$LOCAL_SEQ" in
+        ''|*[!0-9]*)
+            echo "  WARNING: party${IDX} local sequence count came back non-numeric ('$LOCAL_SEQ') - skipping sync" >&2
+            ;;
+        *)
+            aws dynamodb update-item --table-name "$PARTY_CONTROL_TABLE" \
+                --key "{\"party_id\":{\"S\":\"${IDX}\"}}" \
+                --update-expression "SET seq = :n" \
+                --expression-attribute-values "{\":n\":{\"N\":\"${LOCAL_SEQ}\"}}" \
+                >/dev/null
+            echo "  party${IDX} seq synced to ${LOCAL_SEQ}"
+            ;;
+    esac
+    IDX=$((IDX + 1))
+done
+
+echo ""
+echo "Standing mesh is up: coordinator + ${NUM_PARTIES} parties, all persistent."
+echo "Run ./run-program (API) or ./run (direct, operator-only) to admit an execution."
+echo "Re-run ./deploy only when you need the mesh itself to restart - e.g. after ./upload-program."

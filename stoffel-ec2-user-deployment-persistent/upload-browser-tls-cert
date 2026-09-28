@@ -1,0 +1,50 @@
+#!/bin/sh
+# Upload a browser-facing TLS certificate chain and private key to the assets
+# bucket, at the path ./deploy fetches from before starting the coordinator
+# and every party. This is what lets a browser connect over ordinary
+# server-authenticated wss:// (see stoffel-mpc-coordinator's browser_rpc
+# module) instead of the native mutual-TLS transport, which no browser API
+# can use at all (there is no way for page script to present a TLS client
+# certificate).
+#
+# cert-chain.pem must be a real, browser-trusted chain (e.g. from Let's
+# Encrypt or ACM) covering every DNS name browsers will actually connect to
+# - the coordinator's public address and every party's. Browsers reject a
+# self-signed certificate on a raw WebSocket handshake outright, with no
+# prompt to accept it the way a normal page navigation would offer.
+#
+# Optional: without this uploaded, ./deploy runs the mesh exactly as it did
+# before browser support existed, with no browser listener at all.
+set -e
+
+usage() {
+    echo "Usage: $0 <cert-chain.pem> <key.pem>" >&2
+    echo "  cert-chain.pem: PEM certificate chain, leaf certificate first" >&2
+    echo "  key.pem:        PEM private key matching the leaf certificate" >&2
+    exit 1
+}
+
+CERT_CHAIN="${1:?$(usage)}"
+KEY="${2:?$(usage)}"
+[ -f "$CERT_CHAIN" ] || { echo "ERROR: $CERT_CHAIN is not a file" >&2; exit 1; }
+[ -f "$KEY" ] || { echo "ERROR: $KEY is not a file" >&2; exit 1; }
+
+STACK="StoffelEc2UserDeploymentPersistentStack"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+BUCKET=$(get_output AssetsBucketName)
+
+if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
+    echo "ERROR: could not retrieve AssetsBucketName from stack $STACK" >&2
+    exit 1
+fi
+
+echo "Uploading browser TLS certificate to s3://$BUCKET/browser-tls/ ..."
+aws s3 cp "$CERT_CHAIN" "s3://$BUCKET/browser-tls/cert-chain.pem"
+aws s3 cp "$KEY" "s3://$BUCKET/browser-tls/key.pem"
+echo "Done. Run ./deploy to restart the mesh with a browser listener enabled."

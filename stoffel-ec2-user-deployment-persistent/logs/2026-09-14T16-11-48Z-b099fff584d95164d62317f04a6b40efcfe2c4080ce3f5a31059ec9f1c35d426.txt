@@ -1,0 +1,115 @@
+execution_id: b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426
+status: SUCCEEDED
+
+===== coordinator (6 lines) =====
+[2026-09-14T16:11:50.878000+00:00] BENCH_ROUND: Preprocessing ts=1789402310878
+[2026-09-14T16:11:50.927000+00:00] BENCH_ROUND: InputMaskReservation ts=1789402310927
+[2026-09-14T16:12:34.159000+00:00] BENCH_ROUND: InputCollection ts=1789402354158
+[2026-09-14T16:13:59.973000+00:00] BENCH_ROUND: MPCExecution ts=1789402439973
+[2026-09-14T16:14:00.022000+00:00] BENCH_ROUND: OutputDistribution ts=1789402440022
+[2026-09-14T16:14:00.083000+00:00] BENCH_ROUND: ProgramFinished ts=1789402440083
+
+===== party0 (19 lines) =====
+[2026-09-14T16:11:50.589000+00:00] [party 4] RESERVOIR_ALLOCATION_STARTED execution=b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426
+[2026-09-14T16:11:50.869000+00:00] [party 4][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] reservoir allocation ready: program=7565f6ab21c1ee808ce27dcd125004e59d00dd5ff081912c75cd8fd2315ed512 generation=97f2f9d1 digest=641996741431697bc4a6e8bcf4865006ed2f9b0d1f3be702001b03d4a14b0e05 allocated=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 } remaining=PoolAvailability { beaver: 0, random: 20, prand_bit: 0, prand_int: 0 } low=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 }
+[2026-09-14T16:11:50.872000+00:00] [party 4][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] starting online execution
+[2026-09-14T16:11:50.872000+00:00] [party 4] Creating MPC node opts (n_triples=0, n_random=5, n_prandbit=0, n_prandint=0, dynamic=false, timeout=600s)
+[2026-09-14T16:11:50.872000+00:00] [party 4] MPC node setup complete
+[2026-09-14T16:11:50.872000+00:00] [party 4] Starting execution inbox pump...
+[2026-09-14T16:11:50.872000+00:00] [party 4][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] Activated preallocated HB reservoir bundle; preprocessing_wait_ms=0
+[2026-09-14T16:11:50.877000+00:00] [party 4] proposing Preprocessing
+[2026-09-14T16:11:50.926000+00:00] [party 4] proposing InputMaskReservation
+[2026-09-14T16:11:50.986000+00:00] [party 4] waiting for reserved input indices
+[2026-09-14T16:12:34.158000+00:00] [party 4] reserved input indices received
+[2026-09-14T16:12:34.158000+00:00] [party 4] proposing InputCollection
+[2026-09-14T16:12:34.206000+00:00] [party 4] waiting for masked client inputs
+[2026-09-14T16:13:59.973000+00:00] [party 4] masked client inputs received
+[2026-09-14T16:13:59.973000+00:00] [party 4] proposing MPCExecution
+[2026-09-14T16:14:00.023000+00:00] [party 4] proposing OutputDistribution
+[2026-09-14T16:14:00.092000+00:00] [party 4] proposing ProgramFinished
+[2026-09-14T16:14:00.136000+00:00] Program returned: 0
+[2026-09-14T16:14:00.136000+00:00] [party 4][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] cooperative VM execution: instruction_budget_yields=0 online_effect_yields=3
+
+===== party1 (19 lines) =====
+[2026-09-14T16:11:50.690000+00:00] [party 3] RESERVOIR_ALLOCATION_STARTED execution=b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426
+[2026-09-14T16:11:50.869000+00:00] [party 3][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] reservoir allocation ready: program=7565f6ab21c1ee808ce27dcd125004e59d00dd5ff081912c75cd8fd2315ed512 generation=97f2f9d1 digest=641996741431697bc4a6e8bcf4865006ed2f9b0d1f3be702001b03d4a14b0e05 allocated=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 } remaining=PoolAvailability { beaver: 0, random: 20, prand_bit: 0, prand_int: 0 } low=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 }
+[2026-09-14T16:11:50.873000+00:00] [party 3][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] starting online execution
+[2026-09-14T16:11:50.873000+00:00] [party 3] Creating MPC node opts (n_triples=0, n_random=5, n_prandbit=0, n_prandint=0, dynamic=false, timeout=600s)
+[2026-09-14T16:11:50.873000+00:00] [party 3] MPC node setup complete
+[2026-09-14T16:11:50.873000+00:00] [party 3] Starting execution inbox pump...
+[2026-09-14T16:11:50.873000+00:00] [party 3][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] Activated preallocated HB reservoir bundle; preprocessing_wait_ms=0
+[2026-09-14T16:11:50.877000+00:00] [party 3] proposing Preprocessing
+[2026-09-14T16:11:50.927000+00:00] [party 3] proposing InputMaskReservation
+[2026-09-14T16:11:50.977000+00:00] [party 3] waiting for reserved input indices
+[2026-09-14T16:12:34.158000+00:00] [party 3] reserved input indices received
+[2026-09-14T16:12:34.158000+00:00] [party 3] proposing InputCollection
+[2026-09-14T16:12:34.207000+00:00] [party 3] waiting for masked client inputs
+[2026-09-14T16:13:59.973000+00:00] [party 3] masked client inputs received
+[2026-09-14T16:13:59.973000+00:00] [party 3] proposing MPCExecution
+[2026-09-14T16:14:00.017000+00:00] [party 3] proposing OutputDistribution
+[2026-09-14T16:14:00.073000+00:00] [party 3] proposing ProgramFinished
+[2026-09-14T16:14:00.128000+00:00] [party 3][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] cooperative VM execution: instruction_budget_yields=0 online_effect_yields=3
+[2026-09-14T16:14:00.128000+00:00] Program returned: 0
+
+===== party2 (19 lines) =====
+[2026-09-14T16:11:50.613000+00:00] [party 2] RESERVOIR_ALLOCATION_STARTED execution=b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426
+[2026-09-14T16:11:50.870000+00:00] [party 2][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] reservoir allocation ready: program=7565f6ab21c1ee808ce27dcd125004e59d00dd5ff081912c75cd8fd2315ed512 generation=97f2f9d1 digest=641996741431697bc4a6e8bcf4865006ed2f9b0d1f3be702001b03d4a14b0e05 allocated=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 } remaining=PoolAvailability { beaver: 0, random: 20, prand_bit: 0, prand_int: 0 } low=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 }
+[2026-09-14T16:11:50.873000+00:00] [party 2][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] starting online execution
+[2026-09-14T16:11:50.873000+00:00] [party 2] Creating MPC node opts (n_triples=0, n_random=5, n_prandbit=0, n_prandint=0, dynamic=false, timeout=600s)
+[2026-09-14T16:11:50.873000+00:00] [party 2] MPC node setup complete
+[2026-09-14T16:11:50.873000+00:00] [party 2] Starting execution inbox pump...
+[2026-09-14T16:11:50.873000+00:00] [party 2][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] Activated preallocated HB reservoir bundle; preprocessing_wait_ms=0
+[2026-09-14T16:11:50.877000+00:00] [party 2] proposing Preprocessing
+[2026-09-14T16:11:50.920000+00:00] [party 2] proposing InputMaskReservation
+[2026-09-14T16:11:50.980000+00:00] [party 2] waiting for reserved input indices
+[2026-09-14T16:12:34.158000+00:00] [party 2] reserved input indices received
+[2026-09-14T16:12:34.158000+00:00] [party 2] proposing InputCollection
+[2026-09-14T16:12:34.200000+00:00] [party 2] waiting for masked client inputs
+[2026-09-14T16:13:59.973000+00:00] [party 2] masked client inputs received
+[2026-09-14T16:13:59.973000+00:00] [party 2] proposing MPCExecution
+[2026-09-14T16:14:00.024000+00:00] [party 2] proposing OutputDistribution
+[2026-09-14T16:14:00.087000+00:00] [party 2] proposing ProgramFinished
+[2026-09-14T16:14:00.141000+00:00] [party 2][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] cooperative VM execution: instruction_budget_yields=0 online_effect_yields=3
+[2026-09-14T16:14:00.141000+00:00] Program returned: 0
+
+===== party3 (19 lines) =====
+[2026-09-14T16:11:50.564000+00:00] [party 0] RESERVOIR_ALLOCATION_STARTED execution=b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426
+[2026-09-14T16:11:50.869000+00:00] [party 0][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] reservoir allocation ready: program=7565f6ab21c1ee808ce27dcd125004e59d00dd5ff081912c75cd8fd2315ed512 generation=97f2f9d1 digest=641996741431697bc4a6e8bcf4865006ed2f9b0d1f3be702001b03d4a14b0e05 allocated=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 } remaining=PoolAvailability { beaver: 0, random: 20, prand_bit: 0, prand_int: 0 } low=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 }
+[2026-09-14T16:11:50.873000+00:00] [party 0][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] starting online execution
+[2026-09-14T16:11:50.873000+00:00] [party 0] Creating MPC node opts (n_triples=0, n_random=5, n_prandbit=0, n_prandint=0, dynamic=false, timeout=600s)
+[2026-09-14T16:11:50.873000+00:00] [party 0] MPC node setup complete
+[2026-09-14T16:11:50.873000+00:00] [party 0] Starting execution inbox pump...
+[2026-09-14T16:11:50.873000+00:00] [party 0][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] Activated preallocated HB reservoir bundle; preprocessing_wait_ms=0
+[2026-09-14T16:11:50.877000+00:00] [party 0] proposing Preprocessing
+[2026-09-14T16:11:50.920000+00:00] [party 0] proposing InputMaskReservation
+[2026-09-14T16:11:50.970000+00:00] [party 0] waiting for reserved input indices
+[2026-09-14T16:12:34.158000+00:00] [party 0] reserved input indices received
+[2026-09-14T16:12:34.158000+00:00] [party 0] proposing InputCollection
+[2026-09-14T16:12:34.200000+00:00] [party 0] waiting for masked client inputs
+[2026-09-14T16:13:59.973000+00:00] [party 0] masked client inputs received
+[2026-09-14T16:13:59.973000+00:00] [party 0] proposing MPCExecution
+[2026-09-14T16:14:00.022000+00:00] [party 0] proposing OutputDistribution
+[2026-09-14T16:14:00.078000+00:00] [party 0] proposing ProgramFinished
+[2026-09-14T16:14:00.131000+00:00] Program returned: 0
+[2026-09-14T16:14:00.131000+00:00] [party 0][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] cooperative VM execution: instruction_budget_yields=0 online_effect_yields=3
+
+===== party4 (19 lines) =====
+[2026-09-14T16:11:50.690000+00:00] [party 1] RESERVOIR_ALLOCATION_STARTED execution=b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426
+[2026-09-14T16:11:50.869000+00:00] [party 1][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] reservoir allocation ready: program=7565f6ab21c1ee808ce27dcd125004e59d00dd5ff081912c75cd8fd2315ed512 generation=97f2f9d1 digest=641996741431697bc4a6e8bcf4865006ed2f9b0d1f3be702001b03d4a14b0e05 allocated=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 } remaining=PoolAvailability { beaver: 0, random: 20, prand_bit: 0, prand_int: 0 } low=PoolAvailability { beaver: 0, random: 5, prand_bit: 0, prand_int: 0 }
+[2026-09-14T16:11:50.873000+00:00] [party 1][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] starting online execution
+[2026-09-14T16:11:50.873000+00:00] [party 1] Creating MPC node opts (n_triples=0, n_random=5, n_prandbit=0, n_prandint=0, dynamic=false, timeout=600s)
+[2026-09-14T16:11:50.873000+00:00] [party 1] MPC node setup complete
+[2026-09-14T16:11:50.873000+00:00] [party 1] Starting execution inbox pump...
+[2026-09-14T16:11:50.873000+00:00] [party 1][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] Activated preallocated HB reservoir bundle; preprocessing_wait_ms=0
+[2026-09-14T16:11:50.878000+00:00] [party 1] proposing Preprocessing
+[2026-09-14T16:11:50.927000+00:00] [party 1] proposing InputMaskReservation
+[2026-09-14T16:11:50.977000+00:00] [party 1] waiting for reserved input indices
+[2026-09-14T16:12:34.158000+00:00] [party 1] reserved input indices received
+[2026-09-14T16:12:34.158000+00:00] [party 1] proposing InputCollection
+[2026-09-14T16:12:34.207000+00:00] [party 1] waiting for masked client inputs
+[2026-09-14T16:13:59.973000+00:00] [party 1] masked client inputs received
+[2026-09-14T16:13:59.973000+00:00] [party 1] proposing MPCExecution
+[2026-09-14T16:14:00.021000+00:00] [party 1] proposing OutputDistribution
+[2026-09-14T16:14:00.083000+00:00] [party 1] proposing ProgramFinished
+[2026-09-14T16:14:00.141000+00:00] Program returned: 0
+[2026-09-14T16:14:00.146000+00:00] [party 1][execution b099fff584d95164d62317f04a6b40efcfe2c4080ce3f5a31059ec9f1c35d426] cooperative VM execution: instruction_budget_yields=0 online_effect_yields=3

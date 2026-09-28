@@ -1,0 +1,102 @@
+#!/bin/sh
+# Stage a compiled program for the standing mesh and register it in the
+# program catalog API users select from (GET /programs, POST /executions'
+# program_name) - operator-only, no API-key path exists for this (see
+# app.py's docstring for why).
+#
+# Content-addresses the .stflb (the same digest StandingProgramCatalog::load
+# derives from the file's bytes, and that `stoffel-run --print-program-id`
+# prints) and uploads it to a dedicated S3 prefix that ./deploy syncs onto
+# every party instance's --program-dir. This never touches the running
+# containers - a standing node's program catalog is loaded once at
+# container startup and never rescanned (StandingProgramCatalog::load in
+# ../StoffelVM), so a program staged here only becomes runnable after the
+# next ./deploy.
+#
+# Usage: ./upload-program <program-name-or-path> [--name <friendly-name>]
+#   e.g.: ./upload-program client_mul                 (looks for ../programs/client_mul.stflb, registers as "client_mul")
+#         ./upload-program client_mul.stflb
+#         ./upload-program /abs/path/to/client_mul.stflb --name mul
+set -e
+
+STACK="StoffelEc2UserDeploymentPersistentStack"
+
+usage() {
+    echo "Usage: $0 <program-name-or-path> [--name <friendly-name>]" >&2
+    echo "  e.g.: $0 client_mul          (looks for ../programs/client_mul.stflb)" >&2
+    echo "        $0 client_mul.stflb" >&2
+    exit 1
+}
+
+ARG="${1:?$(usage)}"; shift
+FRIENDLY_NAME=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --name) FRIENDLY_NAME="$2"; shift 2 ;;
+        *) echo "Unknown option: $1" >&2; usage ;;
+    esac
+done
+
+case "$ARG" in
+    /*|./*|../*)
+        LOCAL_FILE="$ARG" ;;
+    *.stflb)
+        LOCAL_FILE="$(dirname "$0")/../programs/$ARG" ;;
+    *)
+        LOCAL_FILE="$(dirname "$0")/../programs/$ARG.stflb" ;;
+esac
+
+if [ ! -f "$LOCAL_FILE" ]; then
+    echo "ERROR: $LOCAL_FILE not found" >&2
+    echo "  Run: ./build-programs (from the repo root) to build it" >&2
+    exit 1
+fi
+
+if [ -z "$FRIENDLY_NAME" ]; then
+    FRIENDLY_NAME="$(basename "$LOCAL_FILE" .stflb)"
+fi
+
+BINARY="$(dirname "$0")/../StoffelVM/target/release/stoffel-run"
+if [ ! -f "$BINARY" ]; then
+    echo "ERROR: $BINARY not found — run 'cargo build --release' in ../StoffelVM/" >&2
+    exit 1
+fi
+
+PROGRAM_ID=$("$BINARY" --print-program-id "$LOCAL_FILE" | grep -Eo '[0-9a-f]{64}' | tail -n 1)
+if [ -z "$PROGRAM_ID" ]; then
+    echo "ERROR: could not derive a program ID for $LOCAL_FILE" >&2
+    exit 1
+fi
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+BUCKET=$(get_output AssetsBucketName)
+PROGRAMS_TABLE=$(get_output ProgramsTableName)
+if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ] || [ -z "$PROGRAMS_TABLE" ] || [ "$PROGRAMS_TABLE" = "None" ]; then
+    echo "ERROR: could not resolve $STACK outputs - has it been deployed?" >&2
+    exit 1
+fi
+
+DEST="standing-programs/${PROGRAM_ID}.stflb"
+echo "Uploading $(basename "$LOCAL_FILE") as s3://$BUCKET/$DEST ..."
+aws s3 cp "$LOCAL_FILE" "s3://$BUCKET/$DEST"
+
+NOW=$(python3 -c "import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())")
+echo "Registering '$FRIENDLY_NAME' -> $PROGRAM_ID in $PROGRAMS_TABLE ..."
+aws dynamodb put-item --table-name "$PROGRAMS_TABLE" --item "{
+    \"name\": {\"S\": \"$FRIENDLY_NAME\"},
+    \"program_id\": {\"S\": \"$PROGRAM_ID\"},
+    \"staged_at\": {\"S\": \"$NOW\"}
+}"
+
+echo "Done."
+echo "  name:       $FRIENDLY_NAME"
+echo "  program id: $PROGRAM_ID"
+echo ""
+echo "Not runnable yet - each standing node loads its program catalog once at startup."
+echo "Run ./deploy to sync this onto every party instance and make it admissible."
+echo "Then users can run it via POST /executions {\"program_name\": \"$FRIENDLY_NAME\"}."

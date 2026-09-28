@@ -1,0 +1,28 @@
+#!/bin/sh
+# Cancel a still-preparing or running execution via the API.
+# API_URL defaults to this deployment's endpoint; only set it to override.
+# Usage: API_KEY=... ./cancel-execution <execution_id>
+set -e
+
+DEFAULT_API_URL="https://m29dm05475.execute-api.eu-north-1.amazonaws.com/prod"
+
+usage() {
+    echo "Usage: API_KEY=... $0 <execution_id>" >&2
+    exit 1
+}
+
+[ $# -lt 1 ] && usage
+EXECUTION_ID="$1"
+
+if [ -z "$API_KEY" ]; then
+    echo "ERROR: API_KEY is not set." >&2
+    exit 1
+fi
+API_URL="${API_URL:-$DEFAULT_API_URL}"
+API_URL="${API_URL%/}"
+
+RESPONSE=$(curl -sf -X POST "$API_URL/executions/$EXECUTION_ID/cancel" -H "x-api-key: $API_KEY") || {
+    echo "ERROR: curl failed (exit $?) cancelling $EXECUTION_ID" >&2
+    exit 1
+}
+echo "$RESPONSE" | python3 -m json.tool

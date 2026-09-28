@@ -1,0 +1,21 @@
+#!/bin/sh
+# List the programs the operator has staged and deployed - what
+# ./run-program's <program-name> argument can reference.
+# API_URL defaults to this deployment's endpoint; only set it to override.
+# Usage: API_KEY=... ./list-programs
+set -e
+
+DEFAULT_API_URL="https://m29dm05475.execute-api.eu-north-1.amazonaws.com/prod"
+
+if [ -z "$API_KEY" ]; then
+    echo "ERROR: API_KEY is not set. Usage: API_KEY=... $0" >&2
+    exit 1
+fi
+API_URL="${API_URL:-$DEFAULT_API_URL}"
+API_URL="${API_URL%/}"
+
+RESPONSE=$(curl -sf "$API_URL/programs" -H "x-api-key: $API_KEY") || {
+    echo "ERROR: curl failed (exit $?) fetching /programs" >&2
+    exit 1
+}
+echo "$RESPONSE" | python3 -m json.tool

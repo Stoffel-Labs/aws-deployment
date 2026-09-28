@@ -1,0 +1,59 @@
+#!/bin/sh
+# Poll an execution's status every 5s, printing a message each time, until
+# it reaches a terminal state (SUCCEEDED, FAILED, or CANCELLED). Once
+# terminal, archives its logs into logs/<timestamp>-<execution_id>.txt via
+# ./get-logs - same idea as ../stoffel-ec2-cross-region-deployment and
+# ../stoffel-docker-compose-one-off snapshotting a finished run's logs
+# automatically, just triggered by this execution's own terminal status
+# instead of by the next run starting.
+# API_URL defaults to this deployment's endpoint; only set it to override.
+# Usage: API_KEY=... ./wait-for-execution <execution_id>
+set -e
+
+DEFAULT_API_URL="https://m29dm05475.execute-api.eu-north-1.amazonaws.com/prod"
+
+usage() {
+    echo "Usage: API_KEY=... $0 <execution_id>" >&2
+    exit 1
+}
+
+[ $# -lt 1 ] && usage
+EXECUTION_ID="$1"
+
+if [ -z "$API_KEY" ]; then
+    echo "ERROR: API_KEY is not set." >&2
+    exit 1
+fi
+API_URL="${API_URL:-$DEFAULT_API_URL}"
+API_URL="${API_URL%/}"
+
+while :; do
+    RESPONSE=$(curl -sf "$API_URL/executions/$EXECUTION_ID" -H "x-api-key: $API_KEY") || {
+        echo "ERROR: curl failed (exit $?) fetching status for $EXECUTION_ID" >&2
+        exit 1
+    }
+    STATUS=$(echo "$RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status', ''))")
+    echo "Execution $EXECUTION_ID status: $STATUS"
+    case "$STATUS" in
+        SUCCEEDED|FAILED|CANCELLED) break ;;
+        *) sleep 5 ;;
+    esac
+done
+
+echo ""
+echo "$RESPONSE" | python3 -m json.tool
+echo ""
+
+# Best-effort: a logs archive failing to write shouldn't make an otherwise-
+# successful wait report failure. Only the big formatted dump on stdout is
+# suppressed here - get-logs' own "Archived to logs/..." confirmation (and
+# any error) goes to stderr and stays visible.
+"$(dirname "$0")/get-logs" "$EXECUTION_ID" >/dev/null || echo "WARNING: could not archive logs for $EXECUTION_ID" >&2
+
+if [ "$STATUS" != "SUCCEEDED" ]; then
+    echo "Execution $EXECUTION_ID ended as $STATUS." >&2
+    exit 1
+fi
+
+echo "Execution $EXECUTION_ID succeeded."
+echo "Logs archived under logs/ (see ./get-logs $EXECUTION_ID to view again)."

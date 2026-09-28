@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#e8f1ec" />
+    <title>Three-voter private tally · Stoffel</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <a class="wordmark" href="/" aria-label="Stoffel private voting">
+          <span class="wordmark-mark" aria-hidden="true">S/5</span>
+          <span>Stoffel private voting</span>
+        </a>
+        <nav class="masthead-nav">
+          <a href="./start.html">Start a new election</a>
+        </nav>
+        <div class="network-state" aria-live="polite">
+          <span class="state-dot" id="state-dot"></span>
+          <span id="network-state">Loading WASM</span>
+        </div>
+      </header>
+
+      <section class="hero" aria-labelledby="page-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Three browsers · five parties · no cleartext</p>
+          <h1 id="page-title">One secret ballot. One public tally.</h1>
+          <p class="lede">
+            Each of three browsers casts one private yes/no vote. Five Stoffel
+            parties sum the three ballots and return only the total — never any
+            individual vote — to every voter.
+          </p>
+        </div>
+
+        <div class="ballot-route" aria-label="Private ballot data route">
+          <div class="voter-terminals" id="voter-terminals">
+            <div class="voter-terminal" data-voter="0">
+              <span>Voter 1</span>
+              <strong data-role="ballot">—</strong>
+              <em data-role="state">waiting</em>
+            </div>
+            <div class="voter-terminal" data-voter="1">
+              <span>Voter 2</span>
+              <strong data-role="ballot">—</strong>
+              <em data-role="state">waiting</em>
+            </div>
+            <div class="voter-terminal" data-voter="2">
+              <span>Voter 3</span>
+              <strong data-role="ballot">—</strong>
+              <em data-role="state">waiting</em>
+            </div>
+          </div>
+          <div class="route-line" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="party-rack" aria-label="Five MPC parties">
+            <span>P1</span><span>P2</span><span>P3</span><span>P4</span><span>P5</span>
+          </div>
+          <p>three masked ballots → one jointly reconstructed tally</p>
+        </div>
+      </section>
+
+      <section class="workbench">
+        <form class="ballot" id="ballot">
+          <div class="ballot-head">
+            <span id="voter-role">Private ballot · identity not loaded</span>
+            <span class="range-note">one vote each</span>
+          </div>
+
+          <label class="identity-import">
+            <span>
+              <strong>Unlock with your device</strong>
+              <small>One passkey prompt authorizes this tab for the whole session - no key file, nothing uploaded. Register first if you haven't already.</small>
+            </span>
+            <button id="unlock-identity" type="button">Unlock with your device</button>
+          </label>
+
+          <fieldset class="vote-choice" disabled>
+            <legend>Your vote</legend>
+            <label class="vote-option">
+              <input type="radio" name="vote" value="1" checked />
+              <span>Yes</span>
+            </label>
+            <label class="vote-option">
+              <input type="radio" name="vote" value="0" />
+              <span>No</span>
+            </label>
+          </fieldset>
+
+          <button class="compute" id="cast" type="submit">
+            <span>Seal my ballot</span>
+            <span aria-hidden="true">→</span>
+          </button>
+
+          <p class="form-note" id="form-note">
+            All three browsers must cast a ballot. Only the sum of the three votes is ever revealed.
+          </p>
+        </form>
+
+        <aside class="result-panel" aria-live="polite" aria-atomic="true">
+          <div class="result-label">Tally · decrypted here</div>
+          <div class="result-value" id="result">—</div>
+          <div class="result-proof" id="result-proof">
+            <span>Waiting for one jointly computed tally</span>
+          </div>
+        </aside>
+      </section>
+
+      <section class="ledger" aria-labelledby="ledger-title">
+        <div>
+          <p class="eyebrow">Live protocol ledger</p>
+          <h2 id="ledger-title">What crosses the browser boundary</h2>
+        </div>
+        <ol id="ledger-steps">
+          <li data-step="identity"><span>01</span><strong>Assigned voter seat</strong><em>pending</em></li>
+          <li data-step="masks"><span>02</span><strong>Masked local ballot</strong><em>pending</em></li>
+          <li data-step="rendezvous"><span>03</span><strong>Three-voter rendezvous</strong><em>0 / 3</em></li>
+          <li data-step="output"><span>04</span><strong>Encrypted tally to all three</strong><em>pending</em></li>
+        </ol>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

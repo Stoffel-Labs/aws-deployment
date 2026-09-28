@@ -1,0 +1,182 @@
+#!/bin/sh
+# Run an already-staged program through the user-facing API: submit an
+# execution, poll until it's no longer PREPARING, then print the party/
+# coordinator endpoints and write client-env.sh so ./run-client works
+# immediately. Unlike ../stoffel-ec2-user-deployment/run-program, there is
+# no upload step here - programs are staged exclusively by the operator
+# (see GET /programs for what's available), and there is no
+# --num-parties/--threshold/--backend/--curve choice per run: the standing
+# mesh's topology and backend/curve are fixed by whatever ./deploy last
+# used (see app.py's docstring).
+#
+# Needs only API_KEY (env var) - no AWS credentials or CLI required. Get it
+# from whoever operates the deployment. API_URL/WEB_URL default to this
+# deployment's own endpoints, so you only need to set them if pointing at a
+# different one. Coordinator/party addresses come from the hosted voting
+# site's own public config.json (a plain, unauthenticated GET - no API key
+# needed for that one call) rather than the admission API, since they're
+# fixed Elastic IPs identical for every execution, not anything this
+# specific run's response would carry - see app.py's _add_web_site and
+# admit_execution.py's docstring.
+#
+# Usage: API_KEY=... ./run-program <program-name> [--entry <name>] [--n-clients <n>] [--clients cert0.crt:0,...]
+set -e
+
+DEFAULT_API_URL="https://m29dm05475.execute-api.eu-north-1.amazonaws.com/prod"
+DEFAULT_WEB_URL="https://d1nyapyurezl66.cloudfront.net"
+
+usage() {
+    echo "Usage: $0 <program-name> [--entry <name>] [--n-clients <n>] [--clients cert0.crt:0,...]" >&2
+    echo "  e.g.: $0 aes --n-clients 2" >&2
+    echo "  See ./list-programs (or GET /programs) for what's staged and runnable." >&2
+    exit 1
+}
+
+[ $# -lt 1 ] && usage
+PROGRAM_NAME="$1"; shift
+
+ENTRY="main"
+N_CLIENTS=""
+CLIENTS_OVERRIDE=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --entry)   ENTRY="$2"; shift 2 ;;
+        --n-clients) N_CLIENTS="$2"; shift 2 ;;
+        --clients) CLIENTS_OVERRIDE="$2"; shift 2 ;;
+        *) echo "Unknown option: $1" >&2; usage ;;
+    esac
+done
+
+if [ -z "$API_KEY" ]; then
+    echo "ERROR: API_KEY is not set. Usage: API_KEY=... $0 <program-name> [opts]" >&2
+    exit 1
+fi
+API_URL="${API_URL:-$DEFAULT_API_URL}"
+API_URL="${API_URL%/}"
+WEB_URL="${WEB_URL:-$DEFAULT_WEB_URL}"
+WEB_URL="${WEB_URL%/}"
+
+# Wraps a curl call to the API: on any failure (network/TLS error or non-2xx
+# HTTP response), print the real cause instead of just letting `set -e` kill
+# the script with a bare, undiagnosable exit code.
+api_call() {
+    METHOD="$1"; URL_PATH="$2"; DATA="$3"
+    if [ -n "$DATA" ]; then
+        RESPONSE=$(curl -s -w '\n%{http_code}' -X "$METHOD" "$API_URL$URL_PATH" \
+            -H "x-api-key: $API_KEY" -H "Content-Type: application/json" -d "$DATA") && CURL_EXIT=0 || CURL_EXIT=$?
+    else
+        RESPONSE=$(curl -s -w '\n%{http_code}' -X "$METHOD" "$API_URL$URL_PATH" \
+            -H "x-api-key: $API_KEY") && CURL_EXIT=0 || CURL_EXIT=$?
+    fi
+    if [ "$CURL_EXIT" -ne 0 ]; then
+        echo "ERROR: curl failed (exit $CURL_EXIT, see 'man curl' for the code) calling $METHOD $URL_PATH" >&2
+        echo "  Try running with -v manually against \$API_URL to see the raw connection/TLS error." >&2
+        exit 1
+    fi
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+    case "$HTTP_CODE" in
+        2??) ;;
+        *)
+            echo "ERROR: $METHOD $URL_PATH returned HTTP $HTTP_CODE:" >&2
+            echo "$BODY" >&2
+            exit 1
+            ;;
+    esac
+    echo "$BODY"
+}
+
+JOB_PAYLOAD=$(python3 -c "
+import json, sys
+program_name, entry, n_clients, clients_override = sys.argv[1:5]
+payload = {'program_name': program_name, 'entry': entry}
+if clients_override:
+    clients = []
+    for item in clients_override.split(','):
+        cert, slot = item.split(':')
+        clients.append({'certificate': cert, 'manifest_slot': int(slot)})
+    payload['clients'] = clients
+elif n_clients:
+    payload['n_clients'] = int(n_clients)
+print(json.dumps(payload))
+" "$PROGRAM_NAME" "$ENTRY" "$N_CLIENTS" "$CLIENTS_OVERRIDE")
+
+echo "Submitting execution..."
+echo "  program: $PROGRAM_NAME"
+echo "  entry:   $ENTRY"
+
+SUBMIT_RESPONSE=$(api_call POST /executions "$JOB_PAYLOAD")
+EXECUTION_ID=$(echo "$SUBMIT_RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin)['execution_id'])")
+echo "Execution submitted: $EXECUTION_ID"
+
+echo "Waiting for admission..."
+while :; do
+    STATUS_RESPONSE=$(api_call GET "/executions/$EXECUTION_ID")
+    STATUS=$(echo "$STATUS_RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status', ''))")
+    case "$STATUS" in
+        PREPARING)
+            echo "Execution $EXECUTION_ID is still PREPARING..."
+            sleep 3
+            ;;
+        *) break ;;
+    esac
+done
+
+echo ""
+echo "$STATUS_RESPONSE" | python3 -m json.tool
+echo ""
+
+if [ "$STATUS" = "FAILED" ]; then
+    # Best-effort archive, same as wait-for-execution's terminal-state
+    # archiving - this branch is itself a terminal state (failed before
+    # ever reaching RUNNING), so there's no later wait-for-execution call
+    # that would otherwise do it.
+    "$(dirname "$0")/get-logs" "$EXECUTION_ID" >/dev/null 2>&1 || true
+    echo "Execution $EXECUTION_ID failed." >&2
+    exit 1
+fi
+
+# Coordinator/party addresses are fixed Elastic IPs, identical for every execution -
+# admission's own response no longer carries them (see admit_execution.py's docstring),
+# so they come from the hosted voting site's public config.json instead: a plain,
+# unauthenticated GET, no API key needed for this one call. Soft-fails (skips
+# client-env.sh, same as the old "no endpoints in the response" case) rather than
+# aborting the script - the program run itself already succeeded regardless.
+CONFIG_RESPONSE=$(curl -sf "$WEB_URL/config.json") || {
+    echo "WARNING: could not fetch $WEB_URL/config.json - skipping client-env.sh" >&2
+    CONFIG_RESPONSE=""
+}
+
+if [ -n "$CONFIG_RESPONSE" ]; then
+    python3 -c "
+import json, re, sys
+config = json.loads(sys.argv[1])
+status = json.loads(sys.argv[2])
+endpoints = config.get('endpoints') or {}
+if not endpoints:
+    sys.exit(0)
+print('#!/bin/sh')
+print(f\"COORD_PUBLIC_IP={endpoints['coordinator'].split(':')[0]}\")
+# Native mTLS endpoints only - keys are exactly 'party<n>'. Excludes the
+# 'party<n>_browser' endpoints a browser client would use instead (see
+# stoffel-mpc-coordinator's browser_rpc module); ./run-client speaks the
+# native transport, not that one.
+party_ips = sorted(
+    (int(m.group(1)), v.split(':')[0])
+    for k, v in endpoints.items()
+    for m in [re.fullmatch(r'party(\d+)', k)]
+    if m
+)
+print(f'N_PARTIES={len(party_ips)}')
+print(f\"EXECUTION_ID={status['execution_id']}\")
+for i, ip in party_ips:
+    print(f'PARTY{i}_PUBLIC_IP={ip}')
+" "$CONFIG_RESPONSE" "$STATUS_RESPONSE" > client-env.sh
+fi
+
+echo "Execution $EXECUTION_ID is $STATUS."
+echo "Wrote client-env.sh — run './run-client <client_id> <inputs> --program $PROGRAM_NAME' to start a client."
+echo "Check status with:        ./get-execution-status $EXECUTION_ID"
+echo "Wait until it finishes:   ./wait-for-execution $EXECUTION_ID"
+echo "Fetch logs:                ./get-logs $EXECUTION_ID"
+echo "Cancel it early:           ./cancel-execution $EXECUTION_ID"

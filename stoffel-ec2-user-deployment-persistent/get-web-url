@@ -1,0 +1,21 @@
+#!/bin/sh
+# Print this stack's hosted voting-website URL (the WebUrl stack output) -
+# the CloudFront domain serving web/ (see app.py's _add_web_site).
+# Usage: ./get-web-url
+set -e
+
+STACK="StoffelEc2UserDeploymentPersistentStack"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+WEB_URL=$(get_output WebUrl)
+if [ -z "$WEB_URL" ] || [ "$WEB_URL" = "None" ]; then
+    echo "ERROR: could not retrieve WebUrl from stack $STACK - has it been deployed?" >&2
+    exit 1
+fi
+
+echo "$WEB_URL"

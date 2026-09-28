@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#e8f1ec" />
+    <title>Register your device · Stoffel</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <a class="wordmark" href="./index.html" aria-label="Stoffel private voting">
+          <span class="wordmark-mark" aria-hidden="true">S/5</span>
+          <span>Stoffel private voting</span>
+        </a>
+        <div class="network-state" aria-live="polite">
+          <span class="state-dot" id="state-dot"></span>
+          <span id="network-state">Waiting for your one-time link</span>
+        </div>
+      </header>
+
+      <section class="hero" aria-labelledby="page-title">
+        <div class="hero-copy">
+          <p class="eyebrow">One-time link · once per person</p>
+          <h1 id="page-title">Register your device.</h1>
+          <p class="lede">
+            One passkey prompt registers you for every future election on this deployment - no
+            key file, nothing to keep track of. This link only works once; the operator sends
+            each person their own.
+          </p>
+        </div>
+      </section>
+
+      <section class="workbench">
+        <div class="ballot">
+          <div class="ballot-head">
+            <span id="register-status">Ready to register</span>
+          </div>
+          <p class="range-note" id="register-note">
+            Your device will ask for a fingerprint, face, PIN, or security key - whatever you
+            normally use to unlock this device or browser.
+          </p>
+          <button id="register-button" type="button">Register this device</button>
+          <p class="form-note" id="register-result"></p>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="./register.js"></script>
+  </body>
+</html>

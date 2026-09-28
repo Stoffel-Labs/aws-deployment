@@ -1,0 +1,21 @@
+#!/bin/sh
+# Print this stack's API URL (the ApiUrl stack output) - what run-program's
+# API_URL, and the voting example's start.html "API URL" field, both need.
+# Usage: API_URL=$(./get-api-url)
+set -e
+
+STACK="StoffelEc2UserDeploymentPersistentStack"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+API_URL=$(get_output ApiUrl)
+if [ -z "$API_URL" ] || [ "$API_URL" = "None" ]; then
+    echo "ERROR: could not retrieve ApiUrl from stack $STACK - has it been deployed?" >&2
+    exit 1
+fi
+
+echo "$API_URL"

@@ -1,0 +1,90 @@
+#!/bin/sh
+# Turns completed-but-not-yet-materialized WebAuthn registrations into the .crt files
+# admission's --clients list already understands (ids/pub/clients/{client_name}.crt).
+#
+# Writes the raw SEC1 public key bytes directly - no certificate wrapper, no signing, no CA
+# key of any kind. This is the same way real WebAuthn relying parties store a credential's
+# public key generally (just the raw key, no certificate involved at all), and it's possible
+# here specifically because StandingClientCatalog::load (StoffelVM's
+# crates/stoffel-vm-runner/src/standing_control.rs) accepts a bare 65-byte uncompressed P-256
+# point directly, alongside its original X.509 path - see that function's
+# `parse_client_identity` helper and its test `loads_a_raw_sec1_point_without_any_
+# certificate_at_all`. An earlier version of this script wrapped the key in a
+# throwaway-CA-signed X.509 certificate instead, purely to satisfy that loader's original
+# certificate-only assumption; that workaround is gone now that the loader accepts raw keys.
+#
+# Writes into the *local* ids/pub/clients/ directory next to this script (matching where
+# every other client<n>.crt already lives) - run ./upload-ids and ./deploy afterward
+# yourself, same as after any other change to ids/.
+#
+# Usage: ./materialize-registered-clients
+set -e
+
+STACK="StoffelEc2UserDeploymentPersistentStack"
+IDS_CLIENTS_DIR="$(cd "$(dirname "$0")" && pwd)/../ids/pub/clients"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+TABLE=$(get_output ClientRegistrationsTableName)
+if [ -z "$TABLE" ] || [ "$TABLE" = "None" ]; then
+    echo "ERROR: could not resolve ClientRegistrationsTableName from stack $STACK - has it been deployed?" >&2
+    exit 1
+fi
+
+PENDING=$(aws dynamodb scan --table-name "$TABLE" --output json | python3 -c "
+import json, sys
+
+data = json.load(sys.stdin)
+
+
+def get(item, key):
+    value = item.get(key)
+    return next(iter(value.values())) if value else None
+
+
+for item in data['Items']:
+    if get(item, 'used_at') and not get(item, 'materialized_at'):
+        token = get(item, 'token')
+        client_name = get(item, 'client_name')
+        public_key_b64 = item['public_key']['B']
+        print(f'{token}\t{client_name}\t{public_key_b64}')
+")
+
+if [ -z "$PENDING" ]; then
+    echo "Nothing to materialize - every completed registration already has a .crt file."
+    exit 0
+fi
+
+mkdir -p "$IDS_CLIENTS_DIR"
+
+echo "$PENDING" | while IFS="$(printf '\t')" read -r TOKEN CLIENT_NAME PUBLIC_KEY_B64; do
+    [ -z "$CLIENT_NAME" ] && continue
+
+    # DynamoDB's Binary attribute value is base64 - decode straight to the raw 65-byte SEC1
+    # point and write it as-is; StandingClientCatalog::load takes it directly from here.
+    python3 -c "
+import base64, sys
+raw = base64.b64decode(sys.argv[1])
+if len(raw) != 65 or raw[0] != 0x04:
+    print(f'skipping {sys.argv[2]}: not a 65-byte uncompressed P-256 point', file=sys.stderr)
+    sys.exit(1)
+sys.stdout.buffer.write(raw)
+" "$PUBLIC_KEY_B64" "$CLIENT_NAME" > "$IDS_CLIENTS_DIR/$CLIENT_NAME.crt" || continue
+
+    NOW=$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())')
+    aws dynamodb update-item \
+        --table-name "$TABLE" \
+        --key "{\"token\":{\"S\":\"$TOKEN\"}}" \
+        --update-expression "SET materialized_at = :now" \
+        --expression-attribute-values "{\":now\":{\"S\":\"$NOW\"}}" \
+        >/dev/null
+
+    echo "Materialized $CLIENT_NAME -> ids/pub/clients/$CLIENT_NAME.crt"
+done
+
+echo ""
+echo "Next: ./upload-ids && ./deploy"

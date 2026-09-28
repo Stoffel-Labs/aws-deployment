@@ -1,0 +1,51 @@
+#!/bin/sh
+set -e
+
+# Starts the coordinator + every party EC2 instance back up after
+# ./stop-nodes. Elastic IPs re-attach automatically (they never detached),
+# so no CDK redeploy is needed. Every standing container was started with
+# `--restart unless-stopped`, so Docker restarts them itself once its
+# daemon comes back up on boot - no need to run ./deploy again, though
+# preprocessing/control state persists across the cycle either way since
+# it lives on the instance's EBS volume, not in the container.
+STACK="StoffelEc2UserDeploymentPersistentStack"
+
+get_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
+
+start_instance() {
+    LABEL="$1"; INSTANCE="$2"
+    echo "Starting $LABEL ($INSTANCE)..."
+    aws ec2 start-instances --instance-ids "$INSTANCE" >/dev/null
+}
+
+DEPLOYED_PARTIES=$(get_output DeployedParties)
+if [ -z "$DEPLOYED_PARTIES" ] || [ "$DEPLOYED_PARTIES" = "None" ]; then
+    echo "ERROR: could not resolve $STACK outputs - has it been deployed?" >&2
+    exit 1
+fi
+
+ALL_INSTANCES="$(get_output CoordInstanceId)"
+start_instance "coordinator" "$(get_output CoordInstanceId)"
+
+LAST_PARTY=$((DEPLOYED_PARTIES - 1))
+IDX=0
+while [ "$IDX" -le "$LAST_PARTY" ]; do
+    INSTANCE=$(get_output "Party${IDX}InstanceId")
+    start_instance "party${IDX}" "$INSTANCE"
+    ALL_INSTANCES="$ALL_INSTANCES $INSTANCE"
+    IDX=$((IDX + 1))
+done
+
+echo ""
+echo "Start requests sent for all $((DEPLOYED_PARTIES + 1)) instances. Waiting for them to enter running state..."
+# shellcheck disable=SC2086
+aws ec2 wait instance-running --instance-ids $ALL_INSTANCES
+
+echo ""
+echo "All $((DEPLOYED_PARTIES + 1)) instances are running."
+echo "Give Docker + the standing containers a minute to come back up, then check with ./node-status"
+echo "or GET /programs. If a container doesn't come back (e.g. it was mid-./deploy when stopped), run ./deploy."
