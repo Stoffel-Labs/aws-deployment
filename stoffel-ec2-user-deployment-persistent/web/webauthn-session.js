@@ -303,12 +303,20 @@ export class WebauthnSession {
   async sign(sessionId, messageBytes) {
     const record = await this.store.get(sessionId);
     if (!record) throw new Error(`sign called before getBindMaterial for ${sessionId}`);
-    const signature = await crypto.subtle.sign(
-      { name: "ECDSA", hash: "SHA-256" },
-      record.ecdsaKey,
-      messageBytes,
-    );
-    return new Uint8Array(signature);
+    // [diagnostic] Temporary - tracking down a Safari "OperationError: The operation
+    // failed for an operation-specific reason" seen when several elections/tabs are open
+    // at once. Remove once the real throw site (this, or decryptShare below) is confirmed.
+    try {
+      const signature = await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        record.ecdsaKey,
+        messageBytes,
+      );
+      return new Uint8Array(signature);
+    } catch (error) {
+      console.error(`[diagnostic] crypto.subtle.sign failed (session ${sessionId}):`, error);
+      throw error;
+    }
   }
 
   async getEcdsaPublicKey(sessionId) {
@@ -329,7 +337,13 @@ export class WebauthnSession {
   async decryptShare(sessionId, encryptedShare, info) {
     const record = await this.store.get(sessionId);
     if (!record) throw new Error(`decryptShare called before getBindMaterial for ${sessionId}`);
-    return hpkeOpenP256(encryptedShare, record.ecdhKey, record.ecdhPublicKey, info);
+    // [diagnostic] Temporary - see sign()'s matching note.
+    try {
+      return await hpkeOpenP256(encryptedShare, record.ecdhKey, record.ecdhPublicKey, info);
+    } catch (error) {
+      console.error(`[diagnostic] hpkeOpenP256/decryptShare failed (session ${sessionId}):`, error);
+      throw error;
+    }
   }
 
   /** Clears everything stored for `sessionId` - call when an execution/session is done
