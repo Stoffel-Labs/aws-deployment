@@ -762,6 +762,13 @@ class StoffelEc2UserDeploymentPersistentStack(Stack):
         registration_options_fn = _lambda.Function(
             self, "RegistrationOptionsFn",
             runtime=_lambda.Runtime.PYTHON_3_12,
+            # arm64, matching the EC2 coordinator/party fleet above (AmazonLinuxCpuType.ARM_64)
+            # and, just as importantly, matching what `webauthn_lambda_code`'s Docker bundling
+            # actually produces on an Apple Silicon dev machine by default: `cryptography` ships
+            # an architecture-specific compiled Rust extension, and pinning the two together here
+            # avoids a cold-start `cannot open shared object file` failure from a silent
+            # arm64-bundled/x86_64-declared mismatch.
+            architecture=_lambda.Architecture.ARM_64,
             handler="registration_options.handler",
             code=webauthn_lambda_code,
             environment={
@@ -775,6 +782,7 @@ class StoffelEc2UserDeploymentPersistentStack(Stack):
         register_client_fn = _lambda.Function(
             self, "RegisterClientFn",
             runtime=_lambda.Runtime.PYTHON_3_12,
+            architecture=_lambda.Architecture.ARM_64,
             handler="register_client.handler",
             code=webauthn_lambda_code,
             environment={
