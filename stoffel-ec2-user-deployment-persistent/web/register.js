@@ -11,6 +11,17 @@ const note = document.querySelector("#register-note");
 const button = document.querySelector("#register-button");
 const result = document.querySelector("#register-result");
 
+// This page's own URL *is* the one-time registration link (the token/api/label params
+// register() reads below) - a QR code of it lets someone who opened it on the wrong
+// device (e.g. a laptop, when they meant to register a phone's passkey) switch without
+// needing the link resent. Static for the page's whole lifetime, so unlike start.js's
+// vote-link QR code, this only ever needs to be drawn once, not re-rendered.
+new QRCode(document.querySelector("#register-qr-code"), {
+  text: window.location.href,
+  width: 180,
+  height: 180,
+});
+
 function setStatus(label, state = "") {
   statusLabel.textContent = label;
   document.querySelector(".network-state").classList.toggle("ready", state === "ready");

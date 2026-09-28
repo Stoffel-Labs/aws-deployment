@@ -348,6 +348,13 @@ h1 {
 .result-value { margin: auto 0; font-family: "Iowan Old Style", Georgia, serif; font-size: clamp(70px, 10vw, 132px); line-height: .8; letter-spacing: -.06em; }
 .result-proof { padding-top: 18px; border-top: 1px solid rgba(255,255,255,.32); font: 600 11px/1.5 "SFMono-Regular", Consolas, monospace; }
 
+/* .result-panel is dark (var(--leaf), white text) - a QR code needs a light background
+   behind its dark modules to stay scannable, so it gets its own white card rather than
+   sitting directly on the panel. */
+.qr-code-wrap { margin-top: 14px; }
+.qr-code-label { display: block; margin-bottom: 8px; font: 600 11px/1.5 "SFMono-Regular", Consolas, monospace; text-transform: uppercase; letter-spacing: .08em; opacity: .72; }
+.qr-code { display: inline-block; padding: 10px; background: #fff; border-radius: 8px; line-height: 0; }
+
 .ledger {
   display: grid;
   grid-template-columns: .7fr 1.3fr;

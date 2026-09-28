@@ -110,6 +110,10 @@
             <button class="compute copy-link" id="copy-link" type="button">
               <span>Copy</span>
             </button>
+            <div class="qr-code-wrap">
+              <span class="qr-code-label">Or scan to open the link</span>
+              <div class="qr-code" id="vote-qr-code" aria-label="QR code for the vote link"></div>
+            </div>
           </div>
         </aside>
 
@@ -121,6 +125,7 @@
       <p class="form-note" id="result-error" role="alert" hidden></p>
     </main>
 
+    <script src="./qrcode.js"></script>
     <script type="module" src="./start.js"></script>
   </body>
 </html>

@@ -41,11 +41,16 @@
             Your device will ask for a fingerprint, face, PIN, or security key - whatever you
             normally use to unlock this device or browser.
           </p>
+          <div class="qr-code-wrap">
+            <span class="qr-code-label">On the wrong device? Scan to open this link there</span>
+            <div class="qr-code" id="register-qr-code" aria-label="QR code for this registration link"></div>
+          </div>
           <button id="register-button" type="button">Register this device</button>
           <p class="form-note" id="register-result"></p>
         </div>
       </section>
     </main>
+    <script src="./qrcode.js"></script>
     <script type="module" src="./register.js"></script>
   </body>
 </html>

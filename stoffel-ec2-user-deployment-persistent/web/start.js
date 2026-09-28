@@ -24,6 +24,12 @@ const voteLinkInput = document.querySelector("#vote-link");
 const resultError = document.querySelector("#result-error");
 const cancelledNote = document.querySelector("#cancelled-note");
 const startButtonLabel = startButton.querySelector("span:first-child");
+const voteQrCode = document.querySelector("#vote-qr-code");
+
+// The QRCode instance (from ./qrcode.js, loaded as a plain global script before this
+// module - see start.html) - created once, then reused via .makeCode() for every
+// subsequent election this tab starts, per that library's own documented pattern.
+let qrCode = null;
 
 // Set once an election is successfully started - this page admits at most one execution per
 // tab, and #start-button itself becomes the cancel action from that point on (see the submit
@@ -353,6 +359,7 @@ function resetForNewElection() {
   activeApiUrl = undefined;
   activeApiKey = undefined;
   activeExecutionId = undefined;
+  qrCode?.clear();
 }
 
 form.addEventListener("submit", async (event) => {
@@ -370,6 +377,8 @@ form.addEventListener("submit", async (event) => {
     const link = voteLinkFor(status, endpoints);
     resultExecutionIdInput.value = status.execution_id;
     voteLinkInput.value = link;
+    if (qrCode) qrCode.makeCode(link);
+    else qrCode = new QRCode(voteQrCode, { text: link, width: 180, height: 180 });
     resultPanel.hidden = false;
     setStatus("Election running", "ready");
 
