@@ -1,6 +1,8 @@
 #!/bin/sh
 # Turns completed-but-not-yet-materialized WebAuthn registrations into the .crt files
-# admission's --clients list already understands (ids/pub/clients/{client_name}.crt).
+# admission's --clients list already understands (ids/pub/clients/{client_name}.crt), plus a
+# sidecar credential-ID file the coordinator uses for its own credential-ID-keyed lookup
+# (ids/pub/client-credential-ids/{client_name}.id).
 #
 # Writes the raw SEC1 public key bytes directly - no certificate wrapper, no signing, no CA
 # key of any kind. This is the same way real WebAuthn relying parties store a credential's
@@ -22,6 +24,7 @@ set -e
 
 STACK="StoffelEc2UserDeploymentPersistentStack"
 IDS_CLIENTS_DIR="$(cd "$(dirname "$0")" && pwd)/../ids/pub/clients"
+IDS_CREDENTIAL_ID_DIR="$(cd "$(dirname "$0")" && pwd)/../ids/pub/client-credential-ids"
 
 get_output() {
     aws cloudformation describe-stacks --stack-name "$STACK" \
@@ -51,7 +54,8 @@ for item in data['Items']:
         token = get(item, 'token')
         client_name = get(item, 'client_name')
         public_key_b64 = item['public_key']['B']
-        print(f'{token}\t{client_name}\t{public_key_b64}')
+        credential_id_b64 = item['credential_id']['B']
+        print(f'{token}\t{client_name}\t{public_key_b64}\t{credential_id_b64}')
 ")
 
 if [ -z "$PENDING" ]; then
@@ -59,9 +63,9 @@ if [ -z "$PENDING" ]; then
     exit 0
 fi
 
-mkdir -p "$IDS_CLIENTS_DIR"
+mkdir -p "$IDS_CLIENTS_DIR" "$IDS_CREDENTIAL_ID_DIR"
 
-echo "$PENDING" | while IFS="$(printf '\t')" read -r TOKEN CLIENT_NAME PUBLIC_KEY_B64; do
+echo "$PENDING" | while IFS="$(printf '\t')" read -r TOKEN CLIENT_NAME PUBLIC_KEY_B64 CREDENTIAL_ID_B64; do
     [ -z "$CLIENT_NAME" ] && continue
 
     # DynamoDB's Binary attribute value is base64 - decode straight to the raw 65-byte SEC1
@@ -75,6 +79,15 @@ if len(raw) != 65 or raw[0] != 0x04:
 sys.stdout.buffer.write(raw)
 " "$PUBLIC_KEY_B64" "$CLIENT_NAME" > "$IDS_CLIENTS_DIR/$CLIENT_NAME.crt" || continue
 
+    # The credential ID is an opaque authenticator-chosen byte string (no fixed shape to
+    # validate) - written as-is into its own sidecar directory, kept separate from
+    # ids/pub/clients/ because StandingClientCatalog::load hard-fails on any file there it
+    # can't parse as a key or certificate.
+    python3 -c "
+import base64, sys
+sys.stdout.buffer.write(base64.b64decode(sys.argv[1]))
+" "$CREDENTIAL_ID_B64" > "$IDS_CREDENTIAL_ID_DIR/$CLIENT_NAME.id"
+
     NOW=$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())')
     aws dynamodb update-item \
         --table-name "$TABLE" \
@@ -83,7 +96,7 @@ sys.stdout.buffer.write(raw)
         --expression-attribute-values "{\":now\":{\"S\":\"$NOW\"}}" \
         >/dev/null
 
-    echo "Materialized $CLIENT_NAME -> ids/pub/clients/$CLIENT_NAME.crt"
+    echo "Materialized $CLIENT_NAME -> ids/pub/clients/$CLIENT_NAME.crt, ids/pub/client-credential-ids/$CLIENT_NAME.id"
 done
 
 echo ""

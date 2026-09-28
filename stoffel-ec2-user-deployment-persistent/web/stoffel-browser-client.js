@@ -201,6 +201,11 @@ export class StoffelBrowserClient {
         {
           execution_id: hexToExecutionIdBytes(this.executionId),
           assertion: assertionPayload,
+          // material.credentialId is undefined for bind material persisted before this field
+          // existed (e.g. IndexedDB from an older page load) - send empty, which the
+          // coordinator's `!credential_id.is_empty()` check treats as "no index lookup,
+          // fall back to the roster scan" rather than an error.
+          credential_id: toBytesArray(material.credentialId || new Uint8Array()),
           ecdsa_public_key: ecdsaPublicKeyBytes,
           ecdh_public_key: ecdhPublicKeyBytes,
         },

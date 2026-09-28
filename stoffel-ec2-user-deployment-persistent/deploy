@@ -243,7 +243,9 @@ if browser_enabled:
         f' --browser-addr 0.0.0.0 --browser-port {browser_port} '
         '--browser-tls-cert-chain /app/browser-tls/cert-chain.pem '
         '--browser-tls-key /app/browser-tls/key.pem '
-        f'--webauthn-rp-id {webauthn_rp_id}'
+        f'--webauthn-rp-id {webauthn_rp_id} '
+        '--client-cert-dir /app/ids/pub/clients '
+        '--client-credential-id-dir /app/ids/pub/client-credential-ids'
     )
     browser_volume = '-v /home/ec2-user/browser-tls:/app/browser-tls:ro '
 lines = [

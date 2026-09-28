@@ -192,8 +192,8 @@ export class WebauthnSession {
    * them exist for `sessionId`, generating/prompting only if nothing usable is already
    * stored (including across a page reload, in IndexedDB mode) or cached from an earlier
    * call in this same page load. Returns everything a caller needs to bind to any number of
-   * servers: `{assertion: {authenticatorData, clientDataJson, signature}, ecdsaPublicKey,
-   * ecdhPublicKey}` (all `Uint8Array`).
+   * servers: `{assertion: {authenticatorData, clientDataJson, signature}, credentialId,
+   * ecdsaPublicKey, ecdhPublicKey}` (all `Uint8Array`).
    */
   async getBindMaterial(sessionId) {
     if (this._bindMaterial.has(sessionId)) {
@@ -216,6 +216,7 @@ export class WebauthnSession {
     if (existing && existing.ecdsaKey && existing.ecdhKey && existing.assertion) {
       return {
         assertion: existing.assertion,
+        credentialId: existing.credentialId,
         ecdsaPublicKey: existing.ecdsaPublicKey,
         ecdhPublicKey: existing.ecdhPublicKey,
       };
@@ -228,7 +229,7 @@ export class WebauthnSession {
     const ecdsaPublicKey = await exportRawPublicKey(ecdsaKeyPair.publicKey);
     const ecdhPublicKey = await exportRawPublicKey(ecdhKeyPair.publicKey);
     const challenge = await bindChallenge(ecdsaPublicKey, ecdhPublicKey);
-    const assertion = await this._requestWebauthnAssertion(challenge);
+    const { assertion, credentialId } = await this._requestWebauthnAssertion(challenge);
 
     await this.store.set(sessionId, {
       ecdsaKey: ecdsaKeyPair.privateKey,
@@ -236,14 +237,17 @@ export class WebauthnSession {
       ecdsaPublicKey,
       ecdhPublicKey,
       assertion,
+      credentialId,
       bindings: (existing && existing.bindings) || {},
     });
 
-    return { assertion, ecdsaPublicKey, ecdhPublicKey };
+    return { assertion, credentialId, ecdsaPublicKey, ecdhPublicKey };
   }
 
   /** One `navigator.credentials.get()` prompt - discoverable (no `allowCredentials` hint),
-   * so the platform's own picker shows if more than one registered identity is present. */
+   * so the platform's own picker shows if more than one registered identity is present.
+   * Returns `{assertion, credentialId}` - `credentialId` is `credential.rawId`, the same
+   * opaque value the coordinator's credential-ID index is keyed on. */
   async _requestWebauthnAssertion(challenge) {
     const credential = await navigator.credentials.get({
       publicKey: {
@@ -253,9 +257,12 @@ export class WebauthnSession {
     });
     const response = credential.response;
     return {
-      authenticatorData: new Uint8Array(response.authenticatorData),
-      clientDataJson: new Uint8Array(response.clientDataJSON),
-      signature: new Uint8Array(response.signature),
+      assertion: {
+        authenticatorData: new Uint8Array(response.authenticatorData),
+        clientDataJson: new Uint8Array(response.clientDataJSON),
+        signature: new Uint8Array(response.signature),
+      },
+      credentialId: new Uint8Array(credential.rawId),
     };
   }
 
