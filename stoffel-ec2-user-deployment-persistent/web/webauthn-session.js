@@ -212,36 +212,48 @@ export class WebauthnSession {
   }
 
   async _loadOrCreateBindMaterial(sessionId) {
-    const existing = await this.store.get(sessionId);
-    if (existing && existing.ecdsaKey && existing.ecdhKey && existing.assertion) {
-      return {
-        assertion: existing.assertion,
-        credentialId: existing.credentialId,
-        ecdsaPublicKey: existing.ecdsaPublicKey,
-        ecdhPublicKey: existing.ecdhPublicKey,
-      };
-    }
+    const load = async () => {
+      const existing = await this.store.get(sessionId);
+      if (existing && existing.ecdsaKey && existing.ecdhKey && existing.assertion) {
+        return {
+          assertion: existing.assertion,
+          credentialId: existing.credentialId,
+          ecdsaPublicKey: existing.ecdsaPublicKey,
+          ecdhPublicKey: existing.ecdhPublicKey,
+        };
+      }
 
-    const [ecdsaKeyPair, ecdhKeyPair] = await Promise.all([
-      generateEcdsaKeyPair(),
-      generateEcdhKeyPair(),
-    ]);
-    const ecdsaPublicKey = await exportRawPublicKey(ecdsaKeyPair.publicKey);
-    const ecdhPublicKey = await exportRawPublicKey(ecdhKeyPair.publicKey);
-    const challenge = await bindChallenge(ecdsaPublicKey, ecdhPublicKey);
-    const { assertion, credentialId } = await this._requestWebauthnAssertion(challenge);
+      const [ecdsaKeyPair, ecdhKeyPair] = await Promise.all([
+        generateEcdsaKeyPair(),
+        generateEcdhKeyPair(),
+      ]);
+      const ecdsaPublicKey = await exportRawPublicKey(ecdsaKeyPair.publicKey);
+      const ecdhPublicKey = await exportRawPublicKey(ecdhKeyPair.publicKey);
+      const challenge = await bindChallenge(ecdsaPublicKey, ecdhPublicKey);
+      const { assertion, credentialId } = await this._requestWebauthnAssertion(challenge);
 
-    await this.store.set(sessionId, {
-      ecdsaKey: ecdsaKeyPair.privateKey,
-      ecdhKey: ecdhKeyPair.privateKey,
-      ecdsaPublicKey,
-      ecdhPublicKey,
-      assertion,
-      credentialId,
-      bindings: (existing && existing.bindings) || {},
-    });
+      await this.store.set(sessionId, {
+        ecdsaKey: ecdsaKeyPair.privateKey,
+        ecdhKey: ecdhKeyPair.privateKey,
+        ecdsaPublicKey,
+        ecdhPublicKey,
+        assertion,
+        credentialId,
+        bindings: (existing && existing.bindings) || {},
+      });
 
-    return { assertion, credentialId, ecdsaPublicKey, ecdhPublicKey };
+      return { assertion, credentialId, ecdsaPublicKey, ecdhPublicKey };
+    };
+    // Cross-tab lock: without it, two tabs whose WebAuthn prompts are both
+    // pending at once (neither has written to storage yet) both see
+    // "nothing stored" here and independently generate different keys -
+    // whichever tab's store.set() lands last then silently becomes the
+    // output-encryption target for both, even though the other tab may be
+    // the one that actually submitted. Keyed by sessionId (== executionId),
+    // matching stoffel-browser-client.js's own navigator.locks usage for
+    // this same kind of cross-tab coordination (falls back to running
+    // unlocked if the API is unavailable, same as that file).
+    return navigator.locks ? navigator.locks.request(sessionId, load) : load();
   }
 
   /** One `navigator.credentials.get()` prompt - discoverable (no `allowCredentials` hint),
