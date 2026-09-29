@@ -242,13 +242,17 @@ export class StoffelBrowserClient {
       this.parties,
       this.threshold,
     );
-    const nonceKey = `stoffel:webauthn-session:nonce:${bytesHex(material.ecdsaPublicKey)}:${this.executionId}`;
-    const savedNonce = localStorage.getItem(nonceKey);
-    this.wasmExecution =
-      savedNonce === null
-        ? this.wasmClient.open_execution(this.executionId)
-        : this.wasmClient.resume_execution(this.executionId, BigInt(savedNonce));
-    this._nonceKey = nonceKey;
+    // Each signed request carries its own fresh random nonce and timestamp
+    // (see `_buildSignedRequest`) rather than a shared counter, so unlike
+    // before there's nothing to persist or resume here - opening the same
+    // execution id from multiple tabs (or after a reload) just yields
+    // independent, equally valid handles, with no shared client-side state
+    // for them to fall out of sync on.
+    this.wasmExecution = this.wasmClient.open_execution(this.executionId);
+    // Kept only to serialize `_buildSignedRequest`'s own signing step (not for
+    // nonce-uniqueness - random nonces don't need that); a fixed, stable key
+    // per identity/execution is all that's needed for that.
+    this._signLockKey = `stoffel:webauthn-session:sign-lock:${bytesHex(material.ecdsaPublicKey)}:${this.executionId}`;
   }
 
   /** Signs and sends one `browser_*` RPC call to the given connection (`this.coordinator`
@@ -276,13 +280,22 @@ export class StoffelBrowserClient {
     const binding = await this.identity.getBinding(this.executionId, role);
     if (!binding) throw new Error(`not bound to ${role} yet - call bind() first`);
 
-    const lockKey = this._nonceKey;
+    const lockKey = this._signLockKey;
     const sign = async () => {
-      const nonce = this.wasmExecution.allocate_nonce();
+      // Fresh per request - no shared counter to keep in sync across tabs,
+      // reloads, or storage quirks (see `bind()`). `created` bounds how long
+      // this request stays valid; `nonce` (16 CSPRNG-random bytes) is what
+      // actually prevents replay within that window - the coordinator checks
+      // both (see browser_rpc.rs's `NonceBook`).
+      const nonce = crypto.getRandomValues(new Uint8Array(16));
+      const created = Math.floor(Date.now() / 1000);
       // Build the exact same signature-base bytes the coordinator verifies against by
       // calling into WASM directly (authenticationMessage, exposed specifically for this)
       // rather than reimplementing the byte layout here where it could drift out of sync.
-      const message = authenticationMessage(method, this.executionId, nonce, body);
+      // `created` crosses the wasm-bindgen boundary as a u64, which maps to BigInt (same
+      // convention the old nonce counter used) - the plain-number `created` further below
+      // is a separate value, for the outgoing JSON-RPC payload, where BigInt isn't valid.
+      const message = authenticationMessage(method, this.executionId, BigInt(created), nonce, body);
       const sessionTokenBytes = textEncoder.encode(binding.sessionToken);
       const fullMessage = new Uint8Array(message.length + sessionTokenBytes.length);
       fullMessage.set(message, 0);
@@ -290,14 +303,10 @@ export class StoffelBrowserClient {
 
       const ecdsaPublicKey = await this.identity.getEcdsaPublicKey(this.executionId);
       const signature = await this.identity.sign(this.executionId, fullMessage);
-      localStorage.setItem(lockKey, this.wasmExecution.current_nonce().toString());
       return {
         public_key: toBytesArray(ecdsaPublicKey),
-        // allocate_nonce()/authenticationMessage() use u64 <-> BigInt (wasm-bindgen's
-        // standard mapping) - JSON.stringify can't serialize a BigInt at all, so this must
-        // become a plain Number before going into the JSON-RPC request below (safe: nonces
-        // never realistically approach Number.MAX_SAFE_INTEGER).
-        nonce: Number(nonce),
+        created,
+        nonce: Array.from(nonce),
         signature: toBytesArray(signature),
         body: toBytesArray(body),
         session_token: binding.sessionToken,

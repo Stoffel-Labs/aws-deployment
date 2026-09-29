@@ -32,26 +32,6 @@ function bytesToArray(buffer) {
   return Array.from(new Uint8Array(buffer));
 }
 
-/** SPKI DER for an uncompressed P-256 public key always has this exact 26-byte prefix
- * (SEQUENCE { SEQUENCE { id-ecPublicKey, prime256v1 } }, BIT STRING tag/length/unused-bits)
- * followed directly by the raw 65-byte SEC1 point - fixed length because the algorithm
- * identifier itself is fixed (we only ever request ES256/P-256 below). Extracting the last
- * 65 bytes and checking they start with the uncompressed-point marker (0x04) is a simpler,
- * equally reliable alternative to a full ASN.1 parser for this one fixed shape. */
-function sec1PointFromP256Spki(spkiDer) {
-  const bytes = new Uint8Array(spkiDer);
-  if (bytes.length !== 91) {
-    throw new Error(
-      `unexpected SPKI length ${bytes.length} for a P-256 key (expected 91) - was a non-ES256 credential created?`,
-    );
-  }
-  const point = bytes.slice(bytes.length - 65);
-  if (point[0] !== 0x04) {
-    throw new Error("expected an uncompressed EC point (0x04 prefix)");
-  }
-  return point;
-}
-
 async function registerDevice(token, apiUrl, label) {
   if (!window.PublicKeyCredential) {
     throw new Error("This browser doesn't support passkeys (WebAuthn).");
@@ -69,10 +49,26 @@ async function registerDevice(token, apiUrl, label) {
   // falling back to that same client_name when there isn't.
   const clientName = `client-${token.slice(0, 24)}`;
   const displayName = label || clientName;
+  const base = apiUrl.replace(/\/+$/, "");
+
+  // First half of the standard two-step WebAuthn registration ceremony: a server-generated,
+  // server-recorded challenge (see registration_options.py) - a client-generated challenge
+  // the server never sees in advance would satisfy the WebAuthn API's own "some challenge is
+  // present" requirement while providing none of the anti-replay guarantee it exists for.
+  setStatus("Requesting a registration challenge");
+  const optionsResponse = await fetch(`${base}/client-registrations/options`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  const optionsPayload = await optionsResponse.json().catch(() => ({}));
+  if (!optionsResponse.ok) {
+    throw new Error(optionsPayload.error || `could not start registration (HTTP ${optionsResponse.status})`);
+  }
 
   setStatus("Waiting for your device");
   const userId = crypto.getRandomValues(new Uint8Array(16));
-  const challenge = crypto.getRandomValues(new Uint8Array(32));
+  const challenge = new Uint8Array(optionsPayload.challenge);
   const credential = await navigator.credentials.create({
     publicKey: {
       rp: { id: window.location.hostname, name: "Stoffel private voting" },
@@ -84,25 +80,24 @@ async function registerDevice(token, apiUrl, label) {
     },
   });
 
-  if (typeof credential.response.getPublicKey !== "function") {
-    // A full CBOR/COSE parse of attestationObject would be the fallback here - not
-    // implemented yet; every current major browser supports getPublicKey() (a WebAuthn
-    // Level 2+ convenience method), so this should be rare in practice.
-    throw new Error(
-      "This browser's passkey implementation doesn't expose getPublicKey() - registration can't continue.",
-    );
-  }
-  const spki = await credential.response.getPublicKey();
-  const publicKey = sec1PointFromP256Spki(spki);
-
   setStatus("Registering with the operator");
-  const response = await fetch(`${apiUrl.replace(/\/+$/, "")}/client-registrations`, {
+  // The full attestation response, byte fields as JSON arrays of ints (this codebase's
+  // established over-the-wire convention) - register_client.py verifies the ceremony itself
+  // server-side (challenge, origin, RP ID hash, signature) and derives the public key from
+  // the verified attestation object, rather than trusting a client-asserted key.
+  const response = await fetch(`${base}/client-registrations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       token,
-      credential_id: bytesToArray(credential.rawId),
-      public_key: bytesToArray(publicKey),
+      credential: {
+        id: credential.id,
+        rawId: bytesToArray(credential.rawId),
+        response: {
+          clientDataJSON: bytesToArray(credential.response.clientDataJSON),
+          attestationObject: bytesToArray(credential.response.attestationObject),
+        },
+      },
     }),
   });
   const payload = await response.json().catch(() => ({}));
