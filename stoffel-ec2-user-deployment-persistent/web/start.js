@@ -39,22 +39,24 @@ let activeApiUrl;
 let activeApiKey;
 let activeExecutionId;
 
-// Persists the API key across a page refresh - #api-key has autocomplete="off" (deliberately
-// opting out of the browser's own autofill/credential storage), and otherwise nothing else
-// remembers it, so a reload would mean retyping it every time. Plain localStorage, not a
-// secrets vault - fine for this operator convenience, but worth knowing if that matters to
-// how this page gets used.
+// Persists the API key across a page refresh, but only for as long as this tab stays open -
+// #api-key has autocomplete="off" (deliberately opting out of the browser's own autofill/
+// credential storage), and otherwise nothing else remembers it, so a reload would mean
+// retyping it every time. sessionStorage rather than localStorage specifically: it survives
+// a reload of this same tab (same-origin, same storage), but is cleared the moment the tab
+// closes, rather than sitting on disk indefinitely - not a secrets vault, but a narrower
+// exposure window than localStorage for something this sensitive.
 const API_KEY_STORAGE_KEY = "stoffel:start:api-key";
 try {
-  const savedApiKey = localStorage.getItem(API_KEY_STORAGE_KEY);
+  const savedApiKey = sessionStorage.getItem(API_KEY_STORAGE_KEY);
   if (savedApiKey) apiKeyInput.value = savedApiKey;
 } catch (_) {
   // Storage can be unavailable (private browsing, blocked site data) - just skip restoring.
 }
 apiKeyInput.addEventListener("input", () => {
   try {
-    if (apiKeyInput.value) localStorage.setItem(API_KEY_STORAGE_KEY, apiKeyInput.value);
-    else localStorage.removeItem(API_KEY_STORAGE_KEY);
+    if (apiKeyInput.value) sessionStorage.setItem(API_KEY_STORAGE_KEY, apiKeyInput.value);
+    else sessionStorage.removeItem(API_KEY_STORAGE_KEY);
   } catch (_) {
     // Ignore storage failures - the field still works, it just won't survive a reload.
   }
